@@ -21,10 +21,10 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
-from cotar.analysis import analysis_path
-from cotar.config import cfg
-from cotar.data import GQADataset, task_signature
-from cotar.utils import load_json, save_json
+from taskalign.analysis import analysis_path
+from taskalign.config import cfg
+from taskalign.data import GQADataset, task_signature
+from taskalign.utils import load_json, save_json
 
 TOP_K    = 10
 SPLITS   = {

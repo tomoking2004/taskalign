@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from transformers.image_utils import load_image
 
-from cotar.config import cfg
-from cotar.models import build_smolvlm
+from taskalign.config import cfg
+from taskalign.models import build_smolvlm
 
 MODEL_SIZE     = "500M"
 PROMPT         = "Can you describe this image?"

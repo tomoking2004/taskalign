@@ -1,7 +1,7 @@
 """Run the experiment the study reports: every arm at every seed, into one timestamped set.
 
-The arms are not a setting of this script — `cotar.training` defines them, and this runs
-every one of them. How a run is built is not a setting either: `cotar.training.Settings`
+The arms are not a setting of this script — `taskalign.training` defines them, and this runs
+every one of them. How a run is built is not a setting either: `taskalign.training.Settings`
 holds that, so that this and the sweep beside it build runs the same way and their
 numbers land on one axis.
 
@@ -23,8 +23,8 @@ from itertools import product
 
 from train4all.utils import empty_cuda_cache
 
-from cotar.training import ARMS, Settings, run_training
-from cotar.utils import timestamp
+from taskalign.training import ARMS, Settings, run_training
+from taskalign.utils import timestamp
 
 DEBUG    = False
 SEEDS    = (45, 46)
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     total = len(SEEDS) * len(ARMS)
 
     print(f"timestamp: {ts}"
-          f"\n  → the analyses find this batch by it: name it in cotar/analysis/experiment.py "
+          f"\n  → the analyses find this batch by it: name it in taskalign/analysis/experiment.py "
           f"(ADDED_TIMESTAMP for seeds 45 and 46)\n")
 
     # Seed-major, so an interrupted experiment leaves whole arm comparisons behind

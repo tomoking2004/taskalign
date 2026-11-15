@@ -22,7 +22,7 @@ from typing import Any
 
 import torch.nn.functional as F
 
-from cotar.analysis import (
+from taskalign.analysis import (
     SEEDS,
     TIMESTAMP,
     analysis_path,
@@ -38,8 +38,8 @@ from cotar.analysis import (
     splitter,
     summarize,
 )
-from cotar.config import cfg
-from cotar.utils import save_json
+from taskalign.config import cfg
+from taskalign.utils import save_json
 
 # Filled in from what `sweep.py` prints. Empty until a sweep has been run, in which case
 # only the two points the reported experiment already measured are shown.

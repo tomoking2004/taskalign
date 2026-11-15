@@ -25,7 +25,7 @@ import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from cotar.analysis import (
+from taskalign.analysis import (
     ARMS,
     CONFIDENCE,
     SEEDS,
@@ -37,9 +37,9 @@ from cotar.analysis import (
     run_id,
     summarize,
 )
-from cotar.config import cfg
-from cotar.data import task_signature
-from cotar.utils import load_json, save_json
+from taskalign.config import cfg
+from taskalign.data import task_signature
+from taskalign.utils import load_json, save_json
 
 # Open-ended on the right because one signature alone holds a quarter of the data:
 # without a top bucket the head would swamp whatever the tail is doing.

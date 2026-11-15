@@ -22,7 +22,7 @@ from __future__ import annotations
 import math
 from datetime import timedelta
 
-from cotar.analysis import (
+from taskalign.analysis import (
     ARMS,
     CONFIDENCE,
     SEEDS,
@@ -38,7 +38,7 @@ from cotar.analysis import (
     training_batches,
     training_duration,
 )
-from cotar.utils import save_json
+from taskalign.utils import save_json
 
 # What the arms are compared on, and where each is read from a run's report. `loss` is
 # deliberately absent: it is the objective, and the aligned arms carry an extra term in

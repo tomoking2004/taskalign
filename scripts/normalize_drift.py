@@ -33,7 +33,7 @@ saved per question, and asks it three ways:
 
 None of these replaces the decision quantity, which was fixed before the run. They are
 read beside it, and every one is compared across arms exactly as it is: seed-paired, with
-the interval of `cotar.analysis.statistics`.
+the interval of `taskalign.analysis.statistics`.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ from typing import Any
 
 import torch
 
-from cotar.analysis import (
+from taskalign.analysis import (
     ANY,
     ARMS,
     CONFIDENCE,
@@ -54,8 +54,8 @@ from cotar.analysis import (
     site,
     summarize,
 )
-from cotar.training import cohens_d
-from cotar.utils import save_json
+from taskalign.training import cohens_d
+from taskalign.utils import save_json
 
 SAMPLES_PATH = analysis_path("probe_drift.py").with_suffix(".pt")
 OUT_PATH     = analysis_path(__file__)

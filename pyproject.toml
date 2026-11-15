@@ -3,17 +3,17 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cotar"
+name = "taskalign"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "huggingface-hub",
-    # Reached only on the SmolVLM2-2.2B path (`Size` in cotar/models/smolvlm.py), which
+    # Reached only on the SmolVLM2-2.2B path (`Size` in taskalign/models/smolvlm.py), which
     # errors without it. Nothing here imports it, and the 500M this study runs never
     # does — so grep says unused and it is not.
     "num2words",
     # 10.1 is where `ImageFont.load_default` grew a size and started returning a scalable
-    # font; the overlay perturbations (cotar/analysis/perturbations.py) size their text
+    # font; the overlay perturbations (taskalign/analysis/perturbations.py) size their text
     # to the box with it.
     "pillow>=10.1",
     "schedulefree",
@@ -34,10 +34,10 @@ dependencies = [
 poster = ["lxml"]
 
 [tool.setuptools.packages.find]
-include = ["cotar*"]
+include = ["taskalign*"]
 
 [tool.ruff]
-extend-exclude = ["cotar/data/_gqa_eval.py"]
+extend-exclude = ["taskalign/data/_gqa_eval.py"]
 line-length = 100
 
 [tool.ruff.lint]

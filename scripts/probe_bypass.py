@@ -40,7 +40,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from cotar.analysis import (
+from taskalign.analysis import (
     ARMS,
     CHECKPOINT_NAME,
     MIN_COUNT,
@@ -69,8 +69,8 @@ from cotar.analysis import (
     summarize_places,
     weights,
 )
-from cotar.config import cfg
-from cotar.utils import load_json, save_json
+from taskalign.config import cfg
+from taskalign.utils import load_json, save_json
 
 # Widths to sweep. Bounded above by the rank of the centred answer rows, which is at most
 # the smaller of one less than their number (1,085 rows) and the hidden width (960), so

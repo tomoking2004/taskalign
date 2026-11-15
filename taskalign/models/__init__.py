@@ -1,4 +1,4 @@
-"""The model the study trains, behind the contract of `cotar.types`."""
+"""The model the study trains, behind the contract of `taskalign.types`."""
 
 from .smolvlm import Size, SmolVLM, SmolVLMProcessor, build_smolvlm
 

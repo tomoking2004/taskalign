@@ -1,6 +1,6 @@
-# cotar
+# taskalign
 
-**「視覚言語モデルにおけるタスク類似性に基づく内部表現整合学習に関する検討」の実装．**（`cotar` はリポジトリ名でありパッケージ名．手法や研究の名前ではない．）
+**「視覚言語モデルにおけるタスク類似性に基づく内部表現整合学習に関する検討」の実装．**（`taskalign` はリポジトリ名でありパッケージ名で，題目の「タスク類似性に基づく内部表現整合」を縮めたもの．手法の名前としては使わない．2026-11-15 に `cotar` から改名した．）
 
 GQA の各質問には functional program が付いている．その**演算子列**（例 `select > relate > query`）を**タスク署名**と呼び，署名の一致をもって**タスク類似性**とする．署名が一致するタスクどうしの中間層表現を supervised contrastive loss で引き寄せる——これが**内部表現整合**である．言語モデル損失への補助項として足すだけで，掴むのは生の hidden state そのもの．
 
@@ -21,16 +21,16 @@ GQA の各質問には functional program が付いている．その**演算子
 PyTorch は GPU の世代ごとに index が違うので**先に**入れる．
 
 ```bash
-conda create -n cotar -c conda-forge python=3.12 && conda activate cotar
+conda create -n taskalign -c conda-forge python=3.12 && conda activate taskalign
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu132
 pip install -e .
 ```
 
-`pip install -e .` が `cotar` をパスに通すので，`scripts/` のどれもが作業ディレクトリによらず `cotar` を import できる．flash-attn は任意（Linux のみ）——無ければ自動で SDPA に落ちる．学習ループの [train4all](https://github.com/tomoking2004/train4all) は**リリースタグに固定**してある（どのタグかは `pyproject.toml`）——`main` を追うと，指標の並び順のような出力の形が実験の途中で変わりうる．
+`pip install -e .` が `taskalign` をパスに通すので，`scripts/` のどれもが作業ディレクトリによらず `taskalign` を import できる．flash-attn は任意（Linux のみ）——無ければ自動で SDPA に落ちる．学習ループの [train4all](https://github.com/tomoking2004/train4all) は**リリースタグに固定**してある（どのタグかは `pyproject.toml`）——`main` を追うと，指標の並び順のような出力の形が実験の途中で変わりうる．
 
 データセットは [GQA 公式](https://cs.stanford.edu/people/dorarad/gqa/download.html) から取り，`cfg.datasets_root/gqa/` に置く（`images/`・`questions/`・`eval/`）．`train_balanced_questions.json` は 813MB あるので，これを読むスクリプトは立ち上がりに数分かかる．
 
-**パスの起点は2つある．** リポジトリが持つのはコード・文書・snapshots・analyses——版管理に載せる物である．`cfg.work_root`（既定は `~/TMU/Master/study/cotar`）が持つのはデータセットと `runs/`——数十GBあって，版管理にも同期フォルダにも置けない物である．どちらがどちらかは `cotar/config.py` が答える．
+**パスの起点は2つある．** リポジトリが持つのはコード・文書・snapshots・analyses——版管理に載せる物である．`cfg.work_root`（既定は `~/TMU/Master/study/taskalign`）が持つのはデータセットと `runs/`——数十GBあって，版管理にも同期フォルダにも置けない物である．どちらがどちらかは `taskalign/config.py` が答える．
 
 ## 走らせる
 
@@ -53,9 +53,9 @@ python scripts/update_poster.py            # その結果をポスターの3.3�
 python scripts/check_tidy.py               # tmp/ の形と __pycache__ を確かめる（Stop フックも走らせる）
 ```
 
-**モデルを動かすのは6本**——上の3本と，`probe_bypass_pullback.py`・`probe_dependence.py`（ヤコビ積を取るのでモデルを走らせる），`probe_drift.py`（加工した画像でモデルを走らせ直す）である．残る10本はモデルを走らせない．`probe_bypass.py` を除いて重みも要らないので，GPU の無い機でも回せる．ただし6本（`audit_dataset.py`・`probe_signature.py`・`probe_operators.py`・`stratify_by_frequency.py`・`summarize_sweep.py`・`probe_bypass.py`）は GQA の質問ファイルを読むので，それを置いた機で回す．分析の11本（`train.py`・`sweep.py`・`generate.py`・`update_poster.py`・`check_tidy.py` を除いたもの）は，それぞれ自分と同じ名前の JSON を `analyses/` に書く（`probe_signature.py` → `analyses/probe-signature.json`．`probe_drift.py` は問ごとの距離を同じ名前の `.pt` にも書く）．どの実験を読むかは `cotar/analysis/experiment.py` の `TIMESTAMP` が決める（§8.1 で足した乱数種 45・46 のバッチは `ADDED_TIMESTAMP`）．`probe_bypass.py`・`probe_bypass_pullback.py`・`probe_dependence.py`・`probe_drift.py` の4本は学習済みの重みを要求する（後述）．
+**モデルを動かすのは6本**——上の3本と，`probe_bypass_pullback.py`・`probe_dependence.py`（ヤコビ積を取るのでモデルを走らせる），`probe_drift.py`（加工した画像でモデルを走らせ直す）である．残る10本はモデルを走らせない．`probe_bypass.py` を除いて重みも要らないので，GPU の無い機でも回せる．ただし6本（`audit_dataset.py`・`probe_signature.py`・`probe_operators.py`・`stratify_by_frequency.py`・`summarize_sweep.py`・`probe_bypass.py`）は GQA の質問ファイルを読むので，それを置いた機で回す．分析の11本（`train.py`・`sweep.py`・`generate.py`・`update_poster.py`・`check_tidy.py` を除いたもの）は，それぞれ自分と同じ名前の JSON を `analyses/` に書く（`probe_signature.py` → `analyses/probe-signature.json`．`probe_drift.py` は問ごとの距離を同じ名前の `.pt` にも書く）．どの実験を読むかは `taskalign/analysis/experiment.py` の `TIMESTAMP` が決める（§8.1 で足した乱数種 45・46 のバッチは `ADDED_TIMESTAMP`）．`probe_bypass.py`・`probe_bypass_pullback.py`・`probe_dependence.py`・`probe_drift.py` の4本は学習済みの重みを要求する（後述）．
 
-`train.py` と `sweep.py` は run の建て方を共有する——`cotar/training/run.py` の `Settings` と `run_training` である．既定値が報告した実験の値なので，**sweep は変える設定だけを書き，残りが同じであることが目で見える．** どちらも冒頭の `DEBUG = True` で全分割を切り詰めた短い試走になり，数分で配線を確かめられる．
+`train.py` と `sweep.py` は run の建て方を共有する——`taskalign/training/run.py` の `Settings` と `run_training` である．既定値が報告した実験の値なので，**sweep は変える設定だけを書き，残りが同じであることが目で見える．** どちらも冒頭の `DEBUG = True` で全分割を切り詰めた短い試走になり，数分で配線を確かめられる．
 
 `train.py` は `SEEDS` の各 seed で baseline → proposal → ablation を順に通す．既定は §8.1 で足した 45・46 で，報告した 42・43・44（`20260829-134859`）は回し直さない．run ごとにモデル・loader・trainer を作り直すので，同じ seed の3群は同じバッチ列を見る（サンプラの epoch カウンタを次の群に持ち越さない）．seed が変わればその並びも初期化も変わるので，**群間の差を run ごとのばらつきと区別できる**．
 
@@ -73,19 +73,19 @@ python scripts/check_tidy.py               # tmp/ の形と __pycache__ を確�
 # 1. 学習 — train.py の SEEDS は既定で 45・46．まず DEBUG = True で数分の試走をして，
 #    出来た *_debug の run を runs/ と snapshots/ から消してから本走
 python scripts/train.py
-# 2. 最初に print された timestamp を cotar/analysis/experiment.py の ADDED_TIMESTAMP に入れる
+# 2. 最初に print された timestamp を taskalign/analysis/experiment.py の ADDED_TIMESTAMP に入れる
 # 3. 測定 — 既に測った 9 run は analyses/ から読み直し，新しい 6 run だけを測って 5本で比べる
 python scripts/probe_drift.py
 # 4. 読み直し — 15 run の問ごとの距離を読む（GPU 不要）
 python scripts/normalize_drift.py
 # 5. ポスター — 研究文書 §8.1・§A.6 に読みを書いてから，手元の機で（要るのは lxml だけで，torch は要らない．
-#    cotar 環境には入っていないので，無ければ pip install lxml か pip install -e .[poster]）
+#    taskalign 環境には入っていないので，無ければ pip install lxml か pip install -e .[poster]）
 python scripts/update_poster.py
 ```
 
-`probe_drift.py` が既に測った run を測り直さないのは，同じ条件で測ったと確かめられるときだけである——学習のバッチ（乱数種ごとの timestamp）・checkpoint・加工の一覧・バッチの大きさが同じで，報告用データの全問を測ってあること（`on_file`）．`LIMIT` を入れた試走は，本走が測るはずの run だけを測って表示し，何も書かない．比べる乱数種は `cotar/analysis/experiment.py` の `ROBUSTNESS_SEEDS`（42–46）で，主結果（§5）を出すほかの分析は `SEEDS`（42–44）のまま読む．区間の係数（`analysis/statistics.py` の `t_critical`）は，乱数種の本数によらず出せる（5本なら 2.776）．
+`probe_drift.py` が既に測った run を測り直さないのは，同じ条件で測ったと確かめられるときだけである——学習のバッチ（乱数種ごとの timestamp）・checkpoint・加工の一覧・バッチの大きさが同じで，報告用データの全問を測ってあること（`on_file`）．`LIMIT` を入れた試走は，本走が測るはずの run だけを測って表示し，何も書かない．比べる乱数種は `taskalign/analysis/experiment.py` の `ROBUSTNESS_SEEDS`（42–46）で，主結果（§5）を出すほかの分析は `SEEDS`（42–44）のまま読む．区間の係数（`analysis/statistics.py` の `t_critical`）は，乱数種の本数によらず出せる（5本なら 2.776）．
 
-**`probe_drift.py` を走らせる前に**，重みが在るかを確かめる（`python -c "from cotar.analysis import ADDED_SEEDS, require_checkpoints; require_checkpoints(ADDED_SEEDS)"`．無ければ即座に落ちて場所を告げる．引数を省けば 42–44 を確かめる）．冒頭の `LIMIT` を 64 にすれば数分の試走になる．1 run につき 25 回 testdev を通す——加工 23 通り，対照（同じ質問に別の画像）1回，加工前1回で，各回は生成を含めて学習時の testdev 評価と同じ処理である．加工の定義は `cotar/analysis/perturbations.py` の冒頭に，Wani らの原文で決まっている部分とこちらで決めた部分を分けて書いてある．
+**`probe_drift.py` を走らせる前に**，重みが在るかを確かめる（`python -c "from taskalign.analysis import ADDED_SEEDS, require_checkpoints; require_checkpoints(ADDED_SEEDS)"`．無ければ即座に落ちて場所を告げる．引数を省けば 42–44 を確かめる）．冒頭の `LIMIT` を 64 にすれば数分の試走になる．1 run につき 25 回 testdev を通す——加工 23 通り，対照（同じ質問に別の画像）1回，加工前1回で，各回は生成を含めて学習時の testdev 評価と同じ処理である．加工の定義は `taskalign/analysis/perturbations.py` の冒頭に，Wani らの原文で決まっている部分とこちらで決めた部分を分けて書いてある．
 
 **画像を加工したときの表現の動き（研究文書 §A.6）は測ってある．** `probe_drift.py` を研究室機（RTX 5090）で `LIMIT = None` のまま走らせ，`analyses/probe-drift.json`（run ごとの集計と，群間の対にした差）と `analyses/probe-drift.pt`（問ごとの距離・答えの変化・正誤）を書いた．1 run は 25 pass で約32分，9 run で約4時間53分だった．§8.1 で足した6 run も同じ条件で測り，いまの2ファイルは 15 run ぶんである．`normalize_drift.py` は `.pt` と snapshots だけを読むのでノートPCで回る．
 
@@ -107,7 +107,7 @@ python scripts/summarize_sweep.py
 
 | | |
 | --- | --- |
-| `config.json` | trainer に渡した引数だけ．cotar 由来のもの（arm・align_weight・init_scale）は常に，train4all 由来のもの（seed・batch_size…）は既定から変えたときだけ載る |
+| `config.json` | trainer に渡した引数だけ．taskalign 由来のもの（arm・align_weight・init_scale）は常に，train4all 由来のもの（seed・batch_size…）は既定から変えたときだけ載る |
 | `metrics/eval.json` | 群の identity（arm・seed・align_weight・align_pairing・phase）＋testdev の全指標 |
 | `metrics/predictions.json` | 公式形式の予測．公式評価器で再採点できる |
 | `metrics/representations.pt` | **testdev の表現そのもの**（`(N, L, H)` float32）＋層番号・署名・質問ID．同署名／異署名の cosine 差は 0.02 程度しかなく，半精度ではそれが丸めに沈むので単精度で置く |
@@ -118,7 +118,7 @@ python scripts/summarize_sweep.py
 
 **同じものの写しが，`checkpoints/` だけを抜いて `snapshots/` の同じ run 名の下にも落ちる．** 重みを落とせば1 run は数十MB——上の表のうち `checkpoints/best.pth` 以外は全部こちらに在るので，git がそのまま追跡でき，push すれば結果は GitHub からも読める．エポックごとと最終評価の直後に，変わったファイルだけを原子的に置き換えて更新するので，走っている最中に掴んでも写しは丸ごと揃っている．
 
-**逆に言えば，重みは clone に付いてこない．** 本走9 run と §8.1 の6 run の `checkpoints/best.pth` は，それを回したマシン（`log.txt` の環境バナーによれば Ubuntu 26.04・RTX 5090）の `runs/` にしかない．`probe_bypass.py`・`probe_bypass_pullback.py`・`probe_dependence.py`・`probe_drift.py` はこれを要求するので，そのマシンで走らせるか，重みを先に持ってくる．持ってくるなら，実行機の `runs/` の写しを USB（`E:\runs`）に置くか，置き場所を `$COTAR_RUNS_ROOT` で名指しする——重みを読む側は run ごとに，`$COTAR_RUNS_ROOT`・ローカルの `runs/`・`E:\runs` の順に探す（`cotar/config.py` の `run_roots`）．
+**逆に言えば，重みは clone に付いてこない．** 本走9 run と §8.1 の6 run の `checkpoints/best.pth` は，それを回したマシン（`log.txt` の環境バナーによれば Ubuntu 26.04・RTX 5090）の `runs/` にしかない．`probe_bypass.py`・`probe_bypass_pullback.py`・`probe_dependence.py`・`probe_drift.py` はこれを要求するので，そのマシンで走らせるか，重みを先に持ってくる．持ってくるなら，実行機の `runs/` の写しを USB（`E:\runs`）に置くか，置き場所を `$TASKALIGN_RUNS_ROOT` で名指しする——重みを読む側は run ごとに，`$TASKALIGN_RUNS_ROOT`・ローカルの `runs/`・`E:\runs` の順に探す（`taskalign/config.py` の `run_roots`）．
 
 `snapshots/` には5つのバッチが在る．研究文書の主結果（§5）が報告するのは `20260829-134859` の9 run（3群 × 3 seed）で，分析スクリプトは `summarize_sweep.py` と，§8.1 の乱数種 45・46 も読む `probe_drift.py`・`normalize_drift.py` を除いてこれしか読まない．`20261105-162351` の6 run は §8.1 で足した乱数種 45・46（3群 × 2 seed）で，主結果には入れず，`probe_drift.py`・`normalize_drift.py` だけが読む．`20260830-223056` の2 run は層を第8層・第24層に移した試走（研究文書 §A.5）で，`summarize_sweep.py` だけが読む．`20260727-002344` の9 run は同じ実験を旧版のコードで走らせたもので，走り直す前の報告の記録として残してある．`20260714-033208` の3 run は seed を振る前の単一 seed の実験で，[presentations/](presentations/) の前期公開（2026-07-24）のポスターの裏付けとして残してある——**どちらも別の実行なので，数値が研究文書と一致しなくて当然である．**
 
@@ -135,7 +135,7 @@ python scripts/summarize_sweep.py
 ## 構成
 
 ```
-cotar/
+taskalign/
   config.py          cfg — デバイスと，2つの根（リポジトリ／作業領域）から引くパス
   types.py           VLM / VLMProcessor のプロトコル．モデル実装との唯一の契約
   pairwise.py        pairwise_cosine / pairwise_equal（損失と指標の共有土台）
@@ -177,13 +177,13 @@ scripts/
   check_tidy.py             tmp/ の形と __pycache__ を確かめる（CLAUDE.md の決まりの機械の検査）
 ```
 
-**`cotar/` は，実験を回す側と，済んだ実験を読む側に分かれる．** `train.py`・`sweep.py` は `training/` を，分析の11本は `analysis/` を使う——だから import がそのスクリプトの立ち位置を語る（`generate.py` はモデルを読むだけ，`update_poster.py` はポスターを書くだけ，`check_tidy.py` は tmp/ を見るだけなので，どれも要らない）．`analysis/` のうち学習済みの重みと GPU を要するのは `jacobian.py` と `drift.py` で，重みだけを読む口は `experiment.py` にある．残りはノートPCで完結する（`normalize_drift.py` は Cohen's d を `training/` の `metrics.cohens_d` から借りる）．
+**`taskalign/` は，実験を回す側と，済んだ実験を読む側に分かれる．** `train.py`・`sweep.py` は `training/` を，分析の11本は `analysis/` を使う——だから import がそのスクリプトの立ち位置を語る（`generate.py` はモデルを読むだけ，`update_poster.py` はポスターを書くだけ，`check_tidy.py` は tmp/ を見るだけなので，どれも要らない）．`analysis/` のうち学習済みの重みと GPU を要するのは `jacobian.py` と `drift.py` で，重みだけを読む口は `experiment.py` にある．残りはノートPCで完結する（`normalize_drift.py` は Cohen's d を `training/` の `metrics.cohens_d` から借りる）．
 
-**機構は，この研究の中身に依存しない．** 別の研究に持っていくとき差し替わるのは3つだけ——**ファイルがどこにあるか**（`config.py`），**1 run をどう建てるか**（`training/run.py`），**どの実験を報告するか**（`analysis/experiment.py` の `TIMESTAMP` と `ADDED_TIMESTAMP`）．残りはすべてパスを引数で受け取り，実験を名指ししない．だから `cotar/` で `cfg` を import するのは後の2つと，済んだ実験の重みを読み直す `analysis/jacobian.py` だけで，機構は一つも import しない——`data`・`models`・`types`・`pairwise` と，`training/` の残り（`trainer.py`・`losses.py`・`metrics.py`・`logit_scale.py`）のどこにも `cfg` は無い．`cotar/__init__.py` が何も再輸出しないのも同じ理由で，`import cotar` がマシン固有のパスを束縛しないためである．
+**機構は，この研究の中身に依存しない．** 別の研究に持っていくとき差し替わるのは3つだけ——**ファイルがどこにあるか**（`config.py`），**1 run をどう建てるか**（`training/run.py`），**どの実験を報告するか**（`analysis/experiment.py` の `TIMESTAMP` と `ADDED_TIMESTAMP`）．残りはすべてパスを引数で受け取り，実験を名指ししない．だから `taskalign/` で `cfg` を import するのは後の2つと，済んだ実験の重みを読み直す `analysis/jacobian.py` だけで，機構は一つも import しない——`data`・`models`・`types`・`pairwise` と，`training/` の残り（`trainer.py`・`losses.py`・`metrics.py`・`logit_scale.py`）のどこにも `cfg` は無い．`taskalign/__init__.py` が何も再輸出しないのも同じ理由で，`import taskalign` がマシン固有のパスを束縛しないためである．
 
 `cfg` 自身も2種類を分けて持つ——**マシン固有**（データセット・`runs/`・デバイス）と，**チェックアウト相対**（`snapshots/`・`analyses/`）．**済んだ実験を読む側が結果を書くのは後者だけ**である．マシン固有の側から読むのは，GQA の質問ファイルと，重みを要するスクリプトが使う `runs/`・GQA の画像・デバイスに限る．
 
-**`scripts/` は走らせるものだけを置く．** 複数のスクリプトが分け合うもの——どの実験を読むか，成果物の在処，プローブの当てはめ——は `cotar/` 側にある．スクリプトが自分で決めてよいのは，自分だけの設定と，出力の並べ方だけである．
+**`scripts/` は走らせるものだけを置く．** 複数のスクリプトが分け合うもの——どの実験を読むか，成果物の在処，プローブの当てはめ——は `taskalign/` 側にある．スクリプトが自分で決めてよいのは，自分だけの設定と，出力の並べ方だけである．
 
 **置くのは，学習・検証と，環境が整っているかの最小の確認に要るコードだけ．** ほかのスクリプトの出力に含まれる情報を再計算するだけのものは持たない．ルート直下のディレクトリ名は小文字の複数形の名詞にする．
 

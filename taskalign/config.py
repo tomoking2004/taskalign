@@ -22,12 +22,12 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # found from the package, so a clone elsewhere reads the same data. Where the checkout
 # itself sits at that place, its `.gitignore` keeps datasets/ and runs/ out of version
 # control.
-_WORK_ROOT = Path.home() / "TMU" / "Master" / "study" / "cotar"
+_WORK_ROOT = Path.home() / "TMU" / "Master" / "study" / "taskalign"
 
 # runs/ alone can also live on removable media: a USB copy of the lab machine's runs/,
 # carried over for the analyses that need the weights this checkout does not hold.
 # `run_roots` (below) lists it after the local runs/, and readers probe it per run.
-# $COTAR_RUNS_ROOT names a copy explicitly for when the drive letter is not E:; the
+# $TASKALIGN_RUNS_ROOT names a copy explicitly for when the drive letter is not E:; the
 # datasets stay put either way.
 _USB_RUNS_ROOT = Path("E:/runs")
 
@@ -96,12 +96,12 @@ class Config:
     def run_roots(self) -> tuple[Path, ...]:
         """Every root an already-trained run may be read from, most trusted first.
 
-        An explicit $COTAR_RUNS_ROOT first, then the local runs/, then a USB copy mounted
+        An explicit $TASKALIGN_RUNS_ROOT first, then the local runs/, then a USB copy mounted
         at E:/runs. Only roots that exist are listed, and readers probe them per run — a
         decision made once for the whole list would let a local runs/ holding only debug
         runs shadow the USB copy that holds the reported nine.
         """
-        override = os.environ.get("COTAR_RUNS_ROOT")
+        override = os.environ.get("TASKALIGN_RUNS_ROOT")
         candidates = [Path(override)] if override else []
         candidates += [self.work_root / "runs", _USB_RUNS_ROOT]
         return tuple(root for root in candidates if root.exists())

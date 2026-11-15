@@ -6,12 +6,12 @@
 #
 # The original is `datasets/gqa/eval/eval.py`. It ships in GQA's eval.zip
 # alongside val_choices.json, so it is present on any machine that trains or
-# evaluates with cotar -- which is why no copy is kept in this tree. (One used
+# evaluates with taskalign -- which is why no copy is kept in this tree. (One used
 # to live under `ref/`, and a patch leaked into the copy itself, silently
 # voiding the very baseline it existed to provide.) The whole of the
 # difference is one command:
 #
-#     git diff --no-index datasets/gqa/eval/eval.py cotar/data/_gqa_eval.py
+#     git diff --no-index datasets/gqa/eval/eval.py taskalign/data/_gqa_eval.py
 #
 # The invariant to hold: every change that diff reports sits inside a patch
 # fence. Upstream's Python 2 leftovers (`apply()`, the undefined

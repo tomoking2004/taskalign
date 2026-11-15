@@ -31,7 +31,7 @@ from collections import Counter
 import torch
 import torch.nn.functional as F
 
-from cotar.analysis import (
+from taskalign.analysis import (
     ARMS,
     SEEDS,
     TIMESTAMP,
@@ -42,8 +42,8 @@ from cotar.analysis import (
     splitter,
     surface_matrices,
 )
-from cotar.config import cfg
-from cotar.utils import load_json, save_json
+from taskalign.config import cfg
+from taskalign.utils import load_json, save_json
 
 MIN_POSITIVE = 50      # an operator becomes a target only when it occurs this many times
 OUT_PATH     = analysis_path(__file__)
@@ -138,7 +138,8 @@ if __name__ == "__main__":
     unseen = targets[~train]
     operators_scored = int(((unseen > 0).any(dim=0) & (unseen == 0).any(dim=0)).sum())
 
-    # Both surface forms, on the same terms as the signature probe (see `cotar.analysis.probing`).
+    # Both surface forms, on the same terms as the signature probe
+    # (see `taskalign.analysis.probing`).
     surface = surface_matrices([testdev[qid]["question"].lower().split() for qid in question_ids])
 
     print(f"{len(signatures):,} testdev questions, {len(unique)} signatures"

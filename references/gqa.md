@@ -121,7 +121,7 @@ accuracy のほか，consistency，validity（答えが質問の範囲に入っ�
 **「正解率：GQA 公式の評価（12,578問）」**
 
 - 指標の定義は Evaluation ページの “we give 1 point if the predicted answer p matches a and 0 otherwise” である．論文の語では “the standard accuracy metric”（§4.4）にあたる．
-- 実際に行ったのは，公式の評価スクリプトを手元で `testdev_balanced` に掛けることである（`cotar/data/_gqa_eval.py`．冒頭の注記によれば，手元の修正は採点に触れない）．モデルの答えは，小文字化と句読点の除去をしてから渡す（`cotar/training/metrics.py`）．
+- 実際に行ったのは，公式の評価スクリプトを手元で `testdev_balanced` に掛けることである（`taskalign/data/_gqa_eval.py`．冒頭の注記によれば，手元の修正は採点に触れない）．モデルの答えは，小文字化と句読点の除去をしてから渡す（`taskalign/training/metrics.py`）．
 - 判定：**やや不正確である．** 「公式の評価」は，公式の採点サーバや test 分割の値とも読める．代案は「正解率：GQA 公式の評価スクリプト（testdev_balanced，12,578問）」である．論文の表1（test）の値とは直接比べられない．
 
 ## 学会で聞かれたら

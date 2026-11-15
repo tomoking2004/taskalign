@@ -6,8 +6,8 @@ study: when the image is perturbed in ways that preserve the answer, does the al
 representation move less than the unaligned one, the same, or more? Every analysis before
 this one read the representations of the unperturbed report set.
 
-This measures it the way the paper does (see `cotar.analysis.drift` and
-`cotar.analysis.perturbations`): one pass over the report set per perturbed variant and
+This measures it the way the paper does (see `taskalign.analysis.drift` and
+`taskalign.analysis.perturbations`): one pass over the report set per perturbed variant and
 per control, cosine distance to the base pass, read as a percentage of the control's mean
 and as Cohen's d, at the site the loss touched and at the final layer. Three arms at the
 five seeds of §8.1, so the comparison is the document's usual paired one.
@@ -34,7 +34,7 @@ from typing import Any
 import torch
 from train4all.utils import empty_cuda_cache
 
-from cotar.analysis import (
+from taskalign.analysis import (
     ANY,
     ARMS,
     CHECKPOINT_NAME,
@@ -54,9 +54,9 @@ from cotar.analysis import (
     trained_model,
     wani_variants,
 )
-from cotar.config import cfg
-from cotar.models import build_smolvlm
-from cotar.utils import load_json, save_json
+from taskalign.config import cfg
+from taskalign.models import build_smolvlm
+from taskalign.utils import load_json, save_json
 
 # `None` is the whole report set; a few dozen proves the wiring in minutes.
 LIMIT: int | None = None

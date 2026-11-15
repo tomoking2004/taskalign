@@ -28,8 +28,8 @@ from itertools import product
 
 from train4all.utils import empty_cuda_cache
 
-from cotar.training import Arm, Settings, run_training
-from cotar.utils import timestamp
+from taskalign.training import Arm, Settings, run_training
+from taskalign.utils import timestamp
 
 DEBUG = False
 

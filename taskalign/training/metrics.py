@@ -7,7 +7,7 @@ trainer adds only its own objective's terms (`lm_loss`, `align_loss` and the lea
 in: `measure` returns all of a batch's measurements, `report` all of an accumulated
 epoch's.
 
-What `cotar.analysis` measures afterwards is not an exception to that. It asks its
+What `taskalign.analysis` measures afterwards is not an exception to that. It asks its
 questions of what a run left behind — the saved representations, the predictions, the
 weights — never of a model as it trains, and it needs no training loop to do so.
 """

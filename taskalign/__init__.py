@@ -7,5 +7,5 @@ machinery, which takes its paths as arguments and names no experiment.
 
 Nothing is re-exported here, deliberately. Above all, `cfg` names one machine's directory
 layout, and importing the package is no reason to bind that layout: whoever needs it
-imports `cotar.config` and says so.
+imports `taskalign.config` and says so.
 """

@@ -70,7 +70,7 @@ __all__ = [
 ANY = "any"
 
 # The two readings of "unrelated": the same question of another image, and another
-# question of another image (see `cotar.analysis.perturbations`).
+# question of another image (see `taskalign.analysis.perturbations`).
 CONTROLS = ("other_image", "other_item")
 
 

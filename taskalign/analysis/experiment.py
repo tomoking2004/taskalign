@@ -111,7 +111,7 @@ def batch_of(seed: int) -> str:
     if not ADDED_TIMESTAMP:
         raise SystemExit(
             f"Seed {seed} belongs to the batch §8.1 adds, and ADDED_TIMESTAMP in "
-            f"cotar/analysis/experiment.py is still empty. Put there the timestamp "
+            f"taskalign/analysis/experiment.py is still empty. Put there the timestamp "
             f"scripts/train.py printed when it trained seeds {ADDED_SEEDS}."
         )
     return ADDED_TIMESTAMP

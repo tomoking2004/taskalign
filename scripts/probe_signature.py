@@ -27,7 +27,7 @@ from collections import Counter
 import torch
 import torch.nn.functional as F
 
-from cotar.analysis import (
+from taskalign.analysis import (
     ARMS,
     FORMAT_FEATURES,
     MIN_COUNT,
@@ -48,8 +48,8 @@ from cotar.analysis import (
     surface_matrices,
     surface_vocabularies,
 )
-from cotar.config import cfg
-from cotar.utils import load_json, save_json
+from taskalign.config import cfg
+from taskalign.utils import load_json, save_json
 
 PREFIX_LEN = 4
 OUT_PATH   = analysis_path(__file__)
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     formats = format_matrix(words, [testdev[question_ids[i]]["answer"] for i in keep])
 
     # Neither surface form is the ceiling on its own; the ceiling the representation has
-    # to beat is whichever scores higher, so both are measured (see `cotar.analysis.probing`).
+    # to beat is whichever scores higher, so both are measured (see `taskalign.analysis.probing`).
     surface = surface_matrices(words)
     distinct = surface_vocabularies(words)
 

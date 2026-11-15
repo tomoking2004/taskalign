@@ -42,7 +42,7 @@ import torch
 import torch.nn.functional as F
 from train4all.utils import empty_cuda_cache
 
-from cotar.analysis import (
+from taskalign.analysis import (
     ARMS,
     CHECKPOINT_NAME,
     MODEL,
@@ -57,9 +57,9 @@ from cotar.analysis import (
     site,
     vjp_at_site,
 )
-from cotar.config import cfg
-from cotar.models import SmolVLM, build_smolvlm
-from cotar.utils import load_json, save_json
+from taskalign.config import cfg
+from taskalign.models import SmolVLM, build_smolvlm
+from taskalign.utils import load_json, save_json
 
 # The widths the first two stages swept, so dependence is read on the same axis as where
 # the structure sits.
