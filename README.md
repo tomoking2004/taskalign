@@ -12,7 +12,7 @@ GQA の各質問には functional program が付いている．その**演算子
 | [.claude/context-philosophy.md](.claude/context-philosophy.md) | 上を**どう書くか**の原則．研究の中身には依存しない |
 | [references/](references/) | 論文の要約．1本につき1ファイル．研究文書が引く論文と，引いていないが関連する論文の両方がある．目録は [references/README.md](references/README.md)，要約を作っていない文献の調べは `references/novelty-check.md` |
 | [papers/](papers/) | 論文の原稿（学会予稿・修士論文）．組版の決め事は [papers/principles.md](papers/principles.md)，予稿の書式検査は `papers/pcsj-imps-2026/check.py` |
-| [presentations/](presentations/) | 発表の成果物（ゼミ・学会）と，その作り方の原則（`principles.md`）．成果物は作った時点の記録であって，最新の結果ではない．学会発表の手引き（`…_設計と実装.md`・`…_想定問答.md`）は，処理の中身と想定される質問への答えを口頭で説明できる形にまとめたもの |
+| [presentations/](presentations/) | 発表の成果物（ゼミ・学会）と，その作り方の原則（`principles.md`）．成果物は作った時点の記録であって，最新の結果ではない．学会発表の手引き（`…_設計と実装.md`・`…_想定問答.md`）は，処理の中身と想定される質問への答えを口頭で説明できる形にまとめたもの．`…_質疑.md` は，当日に受けた質問を発表者の聞き取りのまま残し，研究文書で測ったことと測っていないことを添えたもの |
 | [snapshots/](snapshots/) | 各 run が残した記録．重みを除いた写しなので commit できる |
 | [analyses/](analyses/) | run をまたいで測った結果．研究文書の数値の出どころ |
 
@@ -193,7 +193,7 @@ scripts/
 
 **整合を表現の一部だけに掛けたくなったときの差し込み口は `Trainer._project`**（現状 identity——表現をそのまま返す）．入れるなら**固定の**射影にすること——学習可能にすると射影の側を動かすだけで損失を満たせてしまい，仮説が反証不能になる．
 
-**レバーは二つある．** 層を選ぶ側は実装済みで（`Settings.layers`），`sweep.py` の `LAYER_VARIANTS` が第8層・第24層を seed 42 で走らせてある．位置を増やす側は未実装で，`SmolVLM._pool` の一般化が要る（現状は最終プロンプト位置の決め打ち）．
+**レバーは二つある．** 層を選ぶ側は実装済みで（`Settings.layers`），`sweep.py` の `LAYER_VARIANTS` が第8層・第24層を seed 42 で走らせてある．位置を増やす側は未実装で，`SmolVLM._pool` の一般化が要る（現状は最終プロンプト位置の決め打ち）．複数の層に同時に掛ける学習は，`Settings.layers` に複数の層を渡せば走る（層ごとの損失の平均）．実装してあり，未実行である．分析の側は一つの層に掛けた run しか読まない（`analysis/experiment.py` の `constrained_layer` が断る）ので，読むには手を入れる．研究文書 §8.5 の位置の組ごとの相対感度と入れ替えの介入は未実装である．
 
 ## 研究文書の記述は，コードのどこか
 
