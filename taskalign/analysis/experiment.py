@@ -36,9 +36,14 @@ __all__ = [
     "ADDED_TIMESTAMP",
     "ARMS",
     "CHECKPOINT_NAME",
+    "LAYER_VARIANTS",
     "MODEL",
+    "RELOCATED",
+    "RELOCATED_ARMS",
     "ROBUSTNESS_SEEDS",
     "SEEDS",
+    "STRENGTH_VARIANTS",
+    "SWEEP_SEEDS",
     "TIMESTAMP",
     "Arm",
     "Weights",
@@ -46,7 +51,9 @@ __all__ = [
     "batch_of",
     "checkpoint_path",
     "constrained_layer",
+    "constrained_positions",
     "eval_report",
+    "finished_timestamp",
     "predictions",
     "reported_accuracy",
     "representations",
@@ -75,6 +82,19 @@ MODEL            = "HuggingFaceTB/SmolVLM-500M-Instruct"
 # `trainer.test(..., use_best=True)` scored the runs with this checkpoint, so this is the
 # one whose weights belong beside the reported numbers.
 CHECKPOINT_NAME  = "best.pth"
+
+# The runs beyond the reported experiment, by the variant name their directories carry
+# (`scripts/sweep.py` writes them). A variant changes one setting of the reported
+# proposal: the layer aligned (context.md §A.5), the alignment weight (§8.4), or the
+# prompt position aligned (§8.5, second step). The first two run at one seed, to see a
+# curve's shape; the relocation runs both aligned arms at the reported seeds, because its
+# verdict is an interval against the baseline, which no position reaches and so needs no
+# retraining. No timestamp is written here for them — `finished_timestamp` finds it.
+LAYER_VARIANTS    = ("layer8", "layer24")
+STRENGTH_VARIANTS = ("lambda0.03", "lambda0.3", "lambda1.0")
+SWEEP_SEEDS       = (42,)
+RELOCATED         = "relocated"
+RELOCATED_ARMS: tuple[Arm, ...] = ("proposal", "ablation")
 
 
 def run_id(arm: Arm, seed: int, variant: str = "", timestamp: str | None = None) -> str:
@@ -115,6 +135,31 @@ def batch_of(seed: int) -> str:
             f"scripts/train.py printed when it trained seeds {ADDED_SEEDS}."
         )
     return ADDED_TIMESTAMP
+
+
+def finished_timestamp(variant: str, arm: Arm, seed: int) -> str | None:
+    """The timestamp a variant's run was filed under, or `None` if it has not finished.
+
+    Found from the snapshots rather than written into a script after each sweep: a sweep
+    names its runs by variant, arm and seed, so the one finished snapshot carrying those
+    three *is* the record of when it ran, and a chain of jobs can train a variant and
+    read it back without anyone editing a constant in between. Finished means the final
+    evaluation was written; a run that died earlier left a directory and no result, and
+    is not a run. Two finished runs of one variant are refused, since nothing says which
+    of them a number should come from.
+    """
+    suffix = f"_{variant}_{arm}_seed{seed}"
+    finished = sorted(
+        path.name.removesuffix(suffix)
+        for path in cfg.snapshots_root.glob(f"*{suffix}")
+        if (path / "metrics" / "eval.json").exists()
+    )
+    if len(finished) > 1:
+        raise SystemExit(
+            f"{variant} {arm} seed {seed} finished more than once ({', '.join(finished)}). "
+            f"Remove the snapshots that are not the run to report."
+        )
+    return finished[0] if finished else None
 
 
 def _snapshot(arm: Arm, seed: int, variant: str = "", timestamp: str | None = None) -> Path:
@@ -177,6 +222,20 @@ def constrained_layer(
             f"({layers}), but the study's analyses all read a single one."
         )
     return int(layers[0]), int(saved["representations"].size(-1))
+
+
+def constrained_positions(
+    arm: Arm, seed: int, variant: str = "", timestamp: str | None = None
+) -> tuple[int, ...]:
+    """Which prompt positions a run aligned, counted back from the prompt's end.
+
+    The last prompt token, `(-1,)`, for every run trained before the position became a
+    setting: those runs recorded none, and there was nowhere else to align. Read from
+    the run's report rather than from its saved representations, which a run aligned at
+    several positions does not carry in its snapshot.
+    """
+    recorded = eval_report(arm, seed, variant, timestamp)["config"].get("positions")
+    return tuple(recorded or (-1,))
 
 
 def predictions(

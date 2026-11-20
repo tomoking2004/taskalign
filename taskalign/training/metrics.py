@@ -118,21 +118,33 @@ def cohens_d(a: torch.Tensor, b: torch.Tensor) -> float:
     return ((a.mean() - b.mean()) / pooled).item()
 
 
-def layer_names(representations: torch.Tensor, layers: Sequence[int] | None = None) -> list[str]:
-    """What to call each slice of a `(N, L, H)` stack's layer axis — `L16`, `L20`, …
+def layer_names(
+    representations: torch.Tensor,
+    layers: Sequence[int] | None = None,
+    positions: Sequence[int] = (-1,),
+) -> list[str]:
+    """What to call each slice of a `(N, L, H)` stack's site axis — `L16`, `L20`, …
 
-    `layers` is the model's own list, in the order it stacked them; without it the
-    layers are named by position, which reads the same but cannot be trusted to be the
-    block number.
+    `layers` and `positions` are the model's own lists, in the order it stacked them;
+    without `layers` the slices are named by their place in the stack, which reads the
+    same but cannot be trusted to be the block number. A site at the last prompt token
+    is named by its layer alone, which is what every run before the position became a
+    setting was named; any other position is spelled out, `L16@-3`.
     """
     depth = representations.size(1)
     if layers is None:
         return [f"L{i}" for i in range(depth)]
-    if len(layers) != depth:
+    names = [
+        f"L{layer}" if position == -1 else f"L{layer}@{position}"
+        for layer in layers
+        for position in positions
+    ]
+    if len(names) != depth:
         raise ValueError(
-            f"Representations carry {depth} layers but the model names {len(layers)}: {layers}."
+            f"Representations carry {depth} sites but the model names {len(names)}: "
+            f"layers {list(layers)} at positions {list(positions)}."
         )
-    return [f"L{layer}" for layer in layers]
+    return names
 
 
 def flatten_layers(by_layer: dict[str, dict[str, float]]) -> dict[str, float]:
@@ -337,6 +349,7 @@ class Evaluator:
         self._max_samples     = max_stability_samples
         self._seed            = seed
         self._layers          = vlm.layers
+        self._positions       = vlm.positions
 
         self._predictions: dict[str, str] = {}
         self._representations: list[torch.Tensor] = []
@@ -436,6 +449,9 @@ class Evaluator:
                 # axis is anonymous, and a file that constrained layers 8 and 16 is
                 # indistinguishable from one that constrained 16 and 24.
                 "layers": list(self._layers) if self._layers is not None else None,
+                # And which prompt position, counted back from the prompt's end. The
+                # stack is layer-major: each layer at each of these, in this order.
+                "positions": list(self._positions),
                 "signatures": self._signatures,
                 "question_ids": self._question_ids,
             },
@@ -465,7 +481,7 @@ class Evaluator:
         return {
             name: score(hidden)
             for name, hidden in zip(
-                layer_names(representations, self._layers),
+                layer_names(representations, self._layers, self._positions),
                 representations.unbind(dim=1),
                 strict=True,
             )

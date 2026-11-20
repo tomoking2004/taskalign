@@ -10,6 +10,11 @@ which position, or which prompts they are talking about.
 product is all either measurement wants, and the graph is retained only while directions
 remain.
 
+**The same backward reaches every layer.** The readout's gradient with respect to one
+hidden state costs a backward pass, and the pass visits every earlier hidden state on its
+way — so asking for all of them at once (`vjp_everywhere`, context.md §8.5) costs what
+asking for the site alone does.
+
 **The row taken is the site's own.** The gradient comes back for every position, but the
 alignment loss touched one — the last prompt token — and the readout for a prompt depends
 on that prompt's rows alone, so each row of the returned gradient is that prompt's own
@@ -35,6 +40,7 @@ __all__ = [
     "load_for_jacobian",
     "site",
     "vjp_at_site",
+    "vjp_everywhere",
 ]
 
 
@@ -126,3 +132,44 @@ def vjp_at_site(
         site_norm = hidden[rows, last].detach().float().norm(dim=-1).cpu()
         readout_norm = readout.detach().float().norm(dim=-1).cpu()
     return torch.stack(grads, dim=1), site_norm, readout_norm
+
+
+def vjp_everywhere(
+    vlm: SmolVLM, batch: dict[str, Any], directions: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """One batch's gradient lengths at every block's output and every position.
+
+    Returns `(B, m, L, T)` lengths — prompt, direction, block, position, with block `l`
+    at index `l - 1` — beside the `(B, L, T)` norms of the hidden states themselves and
+    the norm of each prompt's readout. `vjp_at_site` returns the gradient vector because
+    one of its callers wants its bearing; over every layer and position only the length
+    is kept, since a vector apiece would be the model's width times larger and nothing
+    reads it. A position past a prompt's end has no path to that prompt's readout — the
+    attention is causal — and comes back as zero.
+    """
+    prompt_lens = batch["prompt_lens"]
+    with torch.enable_grad():
+        hidden_states, readout = vlm.readout_from_layers(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            pixel_values=batch["pixel_values"],
+            pixel_attention_mask=batch.get("pixel_attention_mask"),
+            prompt_lens=prompt_lens,
+        )
+        blocks = hidden_states[1:]
+        lengths = []
+        for j in range(directions.size(1)):
+            direction = directions[:, j].to(readout.device, readout.dtype)
+            grads = torch.autograd.grad(
+                readout,
+                blocks,
+                grad_outputs=direction.repeat(len(prompt_lens), 1),
+                retain_graph=j + 1 < directions.size(1),
+            )
+            lengths.append(torch.stack([g.float().norm(dim=-1) for g in grads], dim=1).cpu())
+        # Detached before leaving the graph's scope, for the reason `vjp_at_site` gives.
+        hidden_norm = torch.stack(
+            [h.detach().float().norm(dim=-1) for h in blocks], dim=1
+        ).cpu()
+        readout_norm = readout.detach().float().norm(dim=-1).cpu()
+    return torch.stack(lengths, dim=1), hidden_norm, readout_norm

@@ -39,6 +39,9 @@ class Settings:
 
     model_size: Size = "500M"
     layers: tuple[int, ...] = (16,)
+    # The prompt positions aligned, counted back from the prompt's end: -1 is the last
+    # prompt token, where the reported experiment aligns.
+    positions: tuple[int, ...] = (-1,)
     align_weight: float = 0.1
     epochs: int = 1
     batch_size: int = 32
@@ -73,7 +76,9 @@ def run_training(
     name = f"{variant}_{arm}_seed{seed}" if variant else f"{arm}_seed{seed}"
     run_id = make_run_id(name, debug=settings.debug, ts=timestamp)
 
-    vlm, processor = build_smolvlm(settings.model_size, layers=settings.layers)
+    vlm, processor = build_smolvlm(
+        settings.model_size, layers=settings.layers, positions=settings.positions
+    )
     trainer = Trainer(
         vlm, processor,
         arm=arm,
@@ -136,6 +141,7 @@ def run_training(
     trainer.update_checkpoint_extras({
         "checkpoint": vlm.checkpoint,
         "layers": vlm.layers,
+        "positions": vlm.positions,
         "attn_implementation": vlm.attn_implementation,
         "samples_per_signature": settings.samples_per_signature,
         "limits": {

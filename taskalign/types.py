@@ -43,11 +43,11 @@ class Encoding(TypedDict):
 
 class VLMOutput(TypedDict):
     """`representation` is the study's object of interest: `(B, L, H)` — one pooled
-    vector per sample per constrained layer, taken at the layers and position the model
-    was configured to read, in the order of `VLM.layers`. The layer axis is present
-    even when a single layer was asked for, so nothing downstream branches on the
-    count. It is `None` when the model was built without a layer, or when the batch
-    carries no prompt lengths to pool at.
+    vector per sample per constrained site, taken at the layers and positions the model
+    was configured to read: each of `VLM.layers` at each of `VLM.positions`, layer-major.
+    The site axis is present even when a single site was asked for, so nothing
+    downstream branches on the count. It is `None` when the model was built without a
+    layer, or when the batch carries no prompt lengths to pool at.
     """
 
     loss: torch.Tensor | None
@@ -93,6 +93,14 @@ class VLM(Protocol):
         """The layers `representation` is read at, in its layer-axis order — `None`
         when the model produces none. Part of the contract because the metrics name
         themselves after these, and only the model knows them.
+        """
+        ...
+
+    @property
+    def positions(self) -> tuple[int, ...]:
+        """The prompt positions each layer is read at, counted back from the prompt's
+        end: -1 is the last prompt token. Part of the contract for the same reason
+        `layers` is.
         """
         ...
 

@@ -35,8 +35,9 @@ pip install -e .
 ## 走らせる
 
 ```bash
+bash scripts/run_plan.sh                   # 研究文書 §8 の次の測定を一つのジョブで（後述．GPU・約28時間）
 python scripts/train.py                    # 3群 × 乱数種 45・46 を回す（研究文書 §8.1．GPU・約17時間半）
-python scripts/sweep.py                    # 整合の強さ／層を振る（GPU・1点あたり約3時間）
+python scripts/sweep.py strength           # 整合の強さを振る．layer で層，position で位置（GPU・1 run あたり約3時間）
 python scripts/generate.py                 # モデルが読み込めて受け答えするかだけを見る
 python scripts/audit_dataset.py            # データ側の数値（分割・署名分布・含意対・答えの語彙）
 python scripts/summarize_runs.py           # run 側の数値（表現の幾何・損失・正解率・対にした差と区間）
@@ -47,25 +48,70 @@ python scripts/stratify_by_frequency.py    # 正解率を署名の頻度で層�
 python scripts/probe_bypass.py             # 整合した構造が出力の読む方向に載っているか（§A.4 第1段）
 python scripts/probe_bypass_pullback.py    # その方向を第16層へ引き戻して問い直す（§A.4 第2段）
 python scripts/probe_dependence.py         # 答えが第16層にどれだけ頼っているか（§A.4 第3段）
+python scripts/probe_dependence_map.py reported   # それを全層・全位置で測り，次に整合を掛ける場所を選ぶ（§8.5 第1歩）
+python scripts/summarize_relocation.py     # 選んだ場所に掛けた run を読み，§8.5 第2歩の表の行を決める
 python scripts/probe_drift.py              # 画像を加工したとき表現がどれだけ動くか（§A.6）
 python scripts/normalize_drift.py          # その距離を，対照の分布の形と別の比の作り方で読み直す（§A.6）
 python scripts/update_poster.py            # その結果をポスターの3.3節へ書く（§8.1 の読み．torch 不要）
+python scripts/update_progress.py          # analyses/ にある結果から 11/27 の進捗報告を組む（torch 不要）
 python scripts/check_tidy.py               # tmp/ の形と __pycache__ を確かめる（Stop フックも走らせる）
 ```
 
-**モデルを動かすのは6本**——上の3本と，`probe_bypass_pullback.py`・`probe_dependence.py`（ヤコビ積を取るのでモデルを走らせる），`probe_drift.py`（加工した画像でモデルを走らせ直す）である．残る10本はモデルを走らせない．`probe_bypass.py` を除いて重みも要らないので，GPU の無い機でも回せる．ただし6本（`audit_dataset.py`・`probe_signature.py`・`probe_operators.py`・`stratify_by_frequency.py`・`summarize_sweep.py`・`probe_bypass.py`）は GQA の質問ファイルを読むので，それを置いた機で回す．分析の11本（`train.py`・`sweep.py`・`generate.py`・`update_poster.py`・`check_tidy.py` を除いたもの）は，それぞれ自分と同じ名前の JSON を `analyses/` に書く（`probe_signature.py` → `analyses/probe-signature.json`．`probe_drift.py` は問ごとの距離を同じ名前の `.pt` にも書く）．どの実験を読むかは `taskalign/analysis/experiment.py` の `TIMESTAMP` が決める（§8.1 で足した乱数種 45・46 のバッチは `ADDED_TIMESTAMP`）．`probe_bypass.py`・`probe_bypass_pullback.py`・`probe_dependence.py`・`probe_drift.py` の4本は学習済みの重みを要求する（後述）．
+**モデルを動かすのは7本**——`train.py`・`sweep.py`・`generate.py` と，`probe_bypass_pullback.py`・`probe_dependence.py`・`probe_dependence_map.py`（ヤコビ積を取るのでモデルを走らせる），`probe_drift.py`（加工した画像でモデルを走らせ直す）である．残る12本はモデルを走らせない．`probe_bypass.py` を除いて重みも要らないので，GPU の無い機でも回せる．ただし6本（`audit_dataset.py`・`probe_signature.py`・`probe_operators.py`・`stratify_by_frequency.py`・`summarize_sweep.py`・`probe_bypass.py`）は GQA の質問ファイルを読むので，それを置いた機で回す．分析の13本（`train.py`・`sweep.py`・`generate.py`・`update_poster.py`・`update_progress.py`・`check_tidy.py` を除いたもの）は，それぞれ自分と同じ名前の JSON を `analyses/` に書く（`probe_signature.py` → `analyses/probe-signature.json`．`probe_drift.py` は問ごとの距離を同じ名前の `.pt` にも書く）．どの実験を読むかは `taskalign/analysis/experiment.py` の `TIMESTAMP` が決める（§8.1 で足した乱数種 45・46 のバッチは `ADDED_TIMESTAMP`）．`sweep.py` が学習した run（層・強さ・位置を変えたもの）は，timestamp を書き写さなくても，分析の側が variant の名前から見つける（`finished_timestamp`）．`probe_bypass.py`・`probe_bypass_pullback.py`・`probe_dependence.py`・`probe_dependence_map.py`・`probe_drift.py` の5本は学習済みの重みを要求する（後述）．
 
-`train.py` と `sweep.py` は run の建て方を共有する——`taskalign/training/run.py` の `Settings` と `run_training` である．既定値が報告した実験の値なので，**sweep は変える設定だけを書き，残りが同じであることが目で見える．** どちらも冒頭の `DEBUG = True` で全分割を切り詰めた短い試走になり，数分で配線を確かめられる．
+`train.py` と `sweep.py` は run の建て方を共有する——`taskalign/training/run.py` の `Settings` と `run_training` である．既定値が報告した実験の値なので，**sweep は変える設定だけを書き，残りが同じであることが目で見える．** `train.py` は冒頭の `DEBUG = True` で，`sweep.py` は `--debug` で，全分割を切り詰めた短い試走になり，数分で配線を確かめられる．
 
 `train.py` は `SEEDS` の各 seed で baseline → proposal → ablation を順に通す．既定は §8.1 で足した 45・46 で，報告した 42・43・44（`20260829-134859`）は回し直さない．run ごとにモデル・loader・trainer を作り直すので，同じ seed の3群は同じバッチ列を見る（サンプラの epoch カウンタを次の群に持ち越さない）．seed が変わればその並びも初期化も変わるので，**群間の差を run ごとのばらつきと区別できる**．
 
-制約する層は `Settings.layers`．`(16,)` なら第16層の1本，`(8, 16, 24)` なら3本を同時に整合する——各層で独立に SupCon を計算して**平均**するので，層を増やしても `align_weight` の意味は変わらない（温度は全層で共有）．
+制約する層は `Settings.layers`，位置は `Settings.positions` で決める．`(16,)` なら第16層の1本，`(8, 16, 24)` なら3本を同時に整合する．位置はプロンプトの末尾から数え，`(-1,)` が報告した実験の末尾のトークン，`(-6, …, -1)` が質問を読み終えた6位置である．層と位置の組ごとに独立に SupCon を計算して**平均**するので，場所を増やしても `align_weight` の意味は変わらない（温度は全部の場所で共有）．
 
 1 run あたり RTX 5090 で約2時間53分（`train_balanced` を1エポック＝29,441 バッチ——全94.3万問のうち，同署名の相方がいない884問はペアを作れないので落ち，残る 942,116 件ぶんを引き終えるまでが1エポック）．**3群 × 3 seed ＝9 run で約26時間．** どちらも `snapshots/20260829-134859_*/log.txt` の実時間．§8.1 の 3群 × 2 seed ＝6 run は，`snapshots/20261105-162351_*/log.txt` の実時間の和で17時間18分，評価まで含めて17時間33分だった．
 
 ## 次の一手を走らせる
 
-**研究文書 §8 の五つのうち，§8.1 は走らせ終え，§8.4 の強さの学習は，`sweep.py` の `VARIANTS` を `LAMBDA_VARIANTS` に替えれば回せる．** 各強さでの相対感度を測るには，`probe_dependence.py` に sweep の run を読ませる手直しが要る．§8.2（稀な署名を表現の側で）にはまだスクリプトが無く，§8.3（答えの型のラベルで整合し，頑健性も測る）と §8.5（答えが依存する層と位置のマップ，選んだ場所と方向での掛け直し）は新しい実装を要する．研究文書の順序では，§8.5 の第1歩（学習不要）が §8.4 より先に来る．
+**研究文書 §8 の五つのうち，§8.1 は走らせ終えた．次に走らせる三つ——§8.5 の第1歩（答えが依存する層と位置のマップ），§8.4 の強さ，§8.5 の第2歩（マップが選んだ位置への掛け直し）——は実装してあり，未実行で，一つのジョブで走る．** §8.2（稀な署名を表現の側で）にはまだスクリプトが無く，§8.3（答えの型のラベルで整合し，頑健性も測る）と §8.5 の第3歩（答えを動かす方向に限った整合）は新しい実装を要する．
+
+```bash
+bash scripts/run_plan.sh                   # check → map → strength → position の順に全部
+bash scripts/run_plan.sh check             # 機体が整っているかだけを見る（データセット・重み・リモート）
+bash scripts/run_plan.sh strength position # 名指した段だけ
+```
+
+| 段 | すること | 見込み（RTX 5090） |
+| --- | --- | --- |
+| `check` | パッケージ・GQA・報告した9本の重み・リモートが，コードの探す場所に在るかを確かめる | 数十秒 |
+| `map` | 8問の試走の後，9本（と，重みが在れば第8層・第24層の2本）で相対感度を全層・全位置で測り，第2歩で整合を掛ける位置を選ぶ | 約1時間（未計測の見積もり） |
+| `strength` | 試走の後，$\lambda = 0.03 / 0.3 / 1.0$ を乱数種 42 で学習し，各強さの相対感度・読み取り精度・正解率を並べる | 約9時間 |
+| `position` | 試走の後，選んだ位置に proposal と ablation を乱数種3つで学習し，その位置の相対感度と正解率から §8.5 第2歩の表の行を決める | 約18時間 |
+
+**段は，終わるたびに自分で記録する．** `analyses/` の結果と，済んだ run の `snapshots/` と，その時点の結果で組み直した進捗報告（`presentations/20261127_進捗報告.pptx`．`update_progress.py` が書く）を commit し，`git pull --rebase` してから push する．だからノートPCでは，**`git pull` するだけで結果と資料が揃う．** 途中で止まっても，同じコマンドで再開できる．済んだ run は学習し直さない．試走と測定は重みからやり直すが，結果と資料が前と同じなら，その段は何も記録しない．ログは `logs/run-plan-<開始時刻>.log` に落ちる．
+
+**資料が言う読みは，測る前に研究文書が決めた文である．** `update_progress.py` は，分析が名指した行（単調に下がるか，§8.5 第2歩の表の何行目か）に応じて，その行の文を選ぶだけで，読みを作らない．ただし研究文書（§8.4・§8.5）に結果を書き入れるのは人の仕事で，それが済むまで，資料は研究文書より先に進んでいる．PowerPoint の無い機で組んだ資料は，開けることを確かめていない（組み方そのものは，同じスクリプトでノートPCの PowerPoint で確かめてある）．
+
+**研究室機では，pull してから，次のプロンプトを Claude Code に貼る．**
+
+```text
+研究文書 §8 の次の測定（マップ → 整合の強さ → 整合を掛ける位置）を，scripts/run_plan.sh で走らせてください．
+
+読むもの：CLAUDE.md，README.md の「次の一手を走らせる」，scripts/run_plan.sh の冒頭の説明．
+
+すること：
+1. ジョブを始める前に一度だけ `git pull --rebase` する．
+2. taskalign の入った conda 環境で `python -c "import taskalign, train4all"` が通るかを確かめる．通らなければ，その環境で `pip install -e .` をやり直す．
+3. `bash scripts/run_plan.sh check` を走らせる．データセットか重みが見つからないと言われたら，見つからない場所と，実際に在る場所を報告して止まる．
+4. `nvidia-smi` で GPU が空いているかを見る．ほかのジョブが使っていたら，始めずに報告する．
+5. /ops:exec の分離の形（tmux）で `bash scripts/run_plan.sh map strength position` を始める．
+6. map の試走（8問）が通ったことをログで確かめてから，始めた時刻，ログの在処（logs/run-plan-*.log），各段の終わる見込みの時刻を報告する．
+
+守ること：
+- コードと設定を変えない．落ちたら，ログの該当箇所と原因の見立てを報告し，直さずに本人に確かめる．同じコマンドで再開できる（済んだ run は学習し直さない）．
+- ジョブが自分で行う記録（commit・push）のほかに，commit・push・pull をしない．
+- 外部に送らない．予稿（papers/pcsj-imps-2026/）に触れない．
+
+段が終わるたびに報告すること：選ばれた位置と §A.4 の値との差（map），各 run の学習時間と正解率（strength・position），§8.5 第2歩の表の行（position）．
+```
+
+**6位置に掛けた run の表現は，git に載らない．** マップが末尾（いま整合している位置）を選ぶと，第2歩は6位置すべてに掛ける．その run の `metrics/representations.pt` は約290MB になり，GitHub が1ファイルに許す 100MB を超えるので，ジョブはこのファイルだけを除いて snapshot を記録する．ファイルは研究室機の `runs/` と作業ツリーに残る．どの位置に掛けたかは `eval.json` の `config.positions` が持つ．
 
 **§8.1（表現の頑健性の向きを決める）は走らせ終えた（2026-11-06）．** 乱数種 45・46 を足した3群の学習が17時間18分（評価まで含めて17時間33分），その重みでの `probe_drift.py` が3時間13分だった（どちらも研究室機の RTX 5090 での実時間）．結果は `analyses/` に，6 run は `snapshots/20261105-162351_*` に在る．回し直すなら，次の順に通す．
 
@@ -91,14 +137,25 @@ python scripts/update_poster.py
 
 **「利用が伴っていない」の測定（研究文書 §A.4）は3段とも済んでいる**——`probe_bypass.py`・`probe_bypass_pullback.py`・`probe_dependence.py` が `analyses/` に結果を書いているので，走らせ直す必要はない．
 
-**§8.4 は重みを要さない．** 層は振ってある——`20260830-223056` の2 run（第8層・第24層，seed 42 の1本ずつ）で，`summarize_sweep.py` はいまこれを読む（研究文書 §A.5）．強さはまだで，`VARIANTS = LAMBDA_VARIANTS` に変えれば $\lambda = 0.03 / 0.3 / 1.0$ を seed 42 の1本ずつ回す（既に測ってある $\lambda = 0$ と 0.1 は走らせ直さない）ので約9時間．**強さと層を同時に振らないこと**——一つの曲線に二つの説明が混ざる．`summarize_sweep.py` が読むのは snapshots と GQA の testdev の質問ファイルだけなので，重みも GPU も要らない．
+**段を手で走らせるなら，ジョブと同じ順に通す．** 層は振ってある——`20260830-223056` の2 run（第8層・第24層，seed 42 の1本ずつ）で，`summarize_sweep.py` はいまこれを読む（研究文書 §A.5）．強さは $\lambda = 0.03 / 0.3 / 1.0$ を seed 42 の1本ずつ回す（既に測ってある $\lambda = 0$ と 0.1 は走らせ直さない）ので約9時間．**強さと層を同時に振らないこと**——一つの曲線に二つの説明が混ざる．`summarize_sweep.py` が読むのは snapshots と GQA の testdev の質問ファイル（と，在れば `analyses/probe-dependence-map.json`）だけなので，重みも GPU も要らない．学習した run の timestamp は，どこにも書き写さない．
 
 ```bash
-# §8.4 を振る — sweep.py 末尾の VARIANTS で強さ（LAMBDA_VARIANTS）か層（LAYER_VARIANTS）を選ぶ．
-#    まず DEBUG = True で数分の試走．配線を確かめてから本走
-python scripts/sweep.py
-#    print された timestamp を summarize_sweep.py の SWEEP_TIMESTAMP に，走らせた variant を SWEPT に入れてから
+# §8.5 第1歩 — 学習は要らない．--prompts 8 は何も書かない試走
+python scripts/probe_dependence_map.py reported --prompts 8
+python scripts/probe_dependence_map.py reported        # 9本を測り，第2歩で掛ける位置を選ぶ
+python scripts/probe_dependence_map.py layer          # 第8層・第24層の2本（重みが在れば）
+# §8.4 の強さ — まず --debug で数分の試走．出来た *_debug の run を runs/ と snapshots/ から消してから本走
+python scripts/sweep.py strength --debug
+python scripts/sweep.py strength
+python scripts/probe_dependence_map.py strength       # 各強さの相対感度
 python scripts/summarize_sweep.py
+# §8.5 第2歩 — マップが選んだ位置に，proposal と ablation を乱数種3つで
+python scripts/sweep.py position --debug
+python scripts/sweep.py position
+python scripts/probe_dependence_map.py position
+python scripts/summarize_relocation.py
+# 資料 — analyses/ にある結果だけで組む（どの機でも走る）
+python scripts/update_progress.py
 ```
 
 ## 結果を読む
@@ -150,6 +207,7 @@ taskalign/
     probing.py         線形プローブと，質問文だけを入力にした対照（コードでは surface）
     subspaces.py       部分空間の中と外で読み，同じ幅のランダムな対照と突き合わせる
     jacobian.py        第16層から読み出しへのベクトル–ヤコビ積．§A.4 第2段・第3段が共有する（要 checkpoints・GPU）
+    dependence.py      相対感度を全層・全位置で測ってプロンプトの並びに揃え，次に整合を掛ける位置を選ぶ（要 checkpoints・GPU）
     perturbations.py   Wani らの画像の加工（付録 A.6 の族と値どおり．指示文だけ逸脱）と，同じ質問に別の画像を付ける対照
     drift.py           加工の前後で表現がどれだけ動くかを，対照に対する比と Cohen's d で測る（要 checkpoints・GPU）
     statistics.py      平均±標準偏差・対にした差・信頼区間——seed のまとめ方の唯一の定義
@@ -160,7 +218,7 @@ taskalign/
   utils/             JSON の読み書き・run ディレクトリ名
 scripts/
   train.py                  3群を SEEDS の各 seed で本走．回す範囲は冒頭の定数，run の中身は Settings
-  sweep.py                  報告した実験が固定した設定を1つだけ振る（整合の強さ・層）
+  sweep.py                  報告した実験が固定した設定を1つだけ振る（整合の強さ・層・位置）
   generate.py               モデルが読み込めて受け答えするかだけを見る最小の確認
   audit_dataset.py          研究文書が語るデータ側の数値を一度に出す（本走に依存しない）
   summarize_runs.py         9 run の記録から研究文書が語る run 側の数値を一度に出す
@@ -171,13 +229,17 @@ scripts/
   probe_bypass.py           整合した構造が出力の読む方向に載っているかを測る（要 checkpoints）
   probe_bypass_pullback.py  その方向を第16層へ引き戻して同じ判定を掛け直す（要 checkpoints・GPU）
   probe_dependence.py       答えが第16層にどれだけ頼っているかを群間で比べる（要 checkpoints・GPU）
+  probe_dependence_map.py   それを全層・全位置で測り，次に整合を掛ける位置を選ぶ（要 checkpoints・GPU）
+  summarize_relocation.py   選んだ位置に掛けた run の相対感度と正解率から，§8.5 第2歩の表の行を決める
   probe_drift.py            画像を加工したとき表現がどれだけ動くかを，5本の乱数種で群間で比べる（要 checkpoints・GPU）
   normalize_drift.py        その距離を，対照の分布の形と別の比の作り方で読み直す
   update_poster.py          その結果を，§8.1 の読みとともにポスターの3.3節へ書く（torch 不要）
+  update_progress.py        analyses/ にある結果から，11/27 の進捗報告を組む（torch 不要）
+  run_plan.sh               §8.5 第1歩・§8.4 の強さ・§8.5 第2歩を一つのジョブで走らせ，段ごとに記録する
   check_tidy.py             tmp/ の形と __pycache__ を確かめる（CLAUDE.md の決まりの機械の検査）
 ```
 
-**`taskalign/` は，実験を回す側と，済んだ実験を読む側に分かれる．** `train.py`・`sweep.py` は `training/` を，分析の11本は `analysis/` を使う——だから import がそのスクリプトの立ち位置を語る（`generate.py` はモデルを読むだけ，`update_poster.py` はポスターを書くだけ，`check_tidy.py` は tmp/ を見るだけなので，どれも要らない）．`analysis/` のうち学習済みの重みと GPU を要するのは `jacobian.py` と `drift.py` で，重みだけを読む口は `experiment.py` にある．残りはノートPCで完結する（`normalize_drift.py` は Cohen's d を `training/` の `metrics.cohens_d` から借りる）．
+**`taskalign/` は，実験を回す側と，済んだ実験を読む側に分かれる．** `train.py`・`sweep.py` は `training/` を，分析の13本は `analysis/` を使う——だから import がそのスクリプトの立ち位置を語る（`generate.py` はモデルを読むだけ，`update_poster.py`・`update_progress.py` は資料を書くだけ，`check_tidy.py` は tmp/ を見るだけなので，どれも要らない）．`sweep.py` だけは両方を使う——どの run が済んでいるかと，マップが選んだ位置を，`analysis/` から読む．`analysis/` のうち学習済みの重みと GPU を要するのは `jacobian.py`・`dependence.py`・`drift.py` で，重みだけを読む口は `experiment.py` にある．残りはノートPCで完結する（`normalize_drift.py` は Cohen's d を `training/` の `metrics.cohens_d` から借りる）．
 
 **機構は，この研究の中身に依存しない．** 別の研究に持っていくとき差し替わるのは3つだけ——**ファイルがどこにあるか**（`config.py`），**1 run をどう建てるか**（`training/run.py`），**どの実験を報告するか**（`analysis/experiment.py` の `TIMESTAMP` と `ADDED_TIMESTAMP`）．残りはすべてパスを引数で受け取り，実験を名指ししない．だから `taskalign/` で `cfg` を import するのは後の2つと，済んだ実験の重みを読み直す `analysis/jacobian.py` だけで，機構は一つも import しない——`data`・`models`・`types`・`pairwise` と，`training/` の残り（`trainer.py`・`losses.py`・`metrics.py`・`logit_scale.py`）のどこにも `cfg` は無い．`taskalign/__init__.py` が何も再輸出しないのも同じ理由で，`import taskalign` がマシン固有のパスを束縛しないためである．
 
@@ -189,13 +251,13 @@ scripts/
 
 **run が測る数値は `metrics.py` だけを見ればいい．** デコードも採点も表現の比較も公式評価器もそこにあり，`Evaluator.measure()` が1バッチの，`Evaluator.report()` がエポック全体の測定値を返す．Trainer が足すのは自分が組んだ目的関数の内訳（`lm_loss`・`align_loss`・`temperature`）だけで，モデルを測ることはしない．**`analysis/` が測るのはこれの例外ではない**——問うのは run が残したもの（表現・予測・重み）であって，走っているモデルではない．
 
-**モデルは `models/` を足すだけで差し替わる．** `types.py` の `VLM` / `VLMProcessor` プロトコルが唯一の契約で，`VLMOutput["representation"]`——整合する層と位置でプールした `(B, L, H)`——を返せば，loader も損失も指標も Trainer もそのまま動く．
+**モデルは `models/` を足すだけで差し替わる．** `types.py` の `VLM` / `VLMProcessor` プロトコルが唯一の契約で，`VLMOutput["representation"]`——整合する層と位置の組ごとにプールした `(B, L, H)`——を返せば，loader も損失も指標も Trainer もそのまま動く．
 
 **整合を表現の一部だけに掛けたくなったときの差し込み口は `Trainer._project`**（現状 identity——表現をそのまま返す）．入れるなら**固定の**射影にすること——学習可能にすると射影の側を動かすだけで損失を満たせてしまい，仮説が反証不能になる．
 
-**レバーは二つある．** 層を選ぶ側は実装済みで（`Settings.layers`），`sweep.py` の `LAYER_VARIANTS` が第8層・第24層を seed 42 で走らせてある．位置を増やす側は未実装で，`SmolVLM._pool` の一般化が要る（現状は最終プロンプト位置の決め打ち）．複数の層に同時に掛ける学習は，`Settings.layers` に複数の層を渡せば走る（層ごとの損失の平均）．実装してあり，未実行である．分析の側は一つの層に掛けた run しか読まない（`analysis/experiment.py` の `constrained_layer` が断る）ので，読むには手を入れる．
+**レバーは二つある．** 層を選ぶ側（`Settings.layers`）は，`sweep.py layer` が第8層・第24層を seed 42 で走らせてある．位置を選ぶ側（`Settings.positions`）は，プロンプトの末尾から数えた位置を渡す．`sweep.py position` が，マップの選んだ位置で走らせる．実装してあり，未実行である．複数の層に同時に掛ける学習は，`Settings.layers` に複数の層を渡せば走る（場所ごとの損失の平均）．これも実装してあり，未実行である．分析の側は一つの層に掛けた run しか読まない（`analysis/experiment.py` の `constrained_layer` が断る）ので，読むには手を入れる．複数の位置に掛けた run では，`representations` が最初の位置の表現を返す．
 
-**研究文書 §8.3・§8.5 が計画する測定と学習は，未実装である．** §8.5 の全層・全位置の相対感度のマップ，選んだ位置に掛ける学習（位置のレバー），第3歩の $J(U_m)$ への固定の射影（`Trainer._project` に入れる）と，§8.3 の答えの型をラベルにする学習である．
+**研究文書 §8.3 と §8.5 の第3歩が計画する学習は，未実装である．** 第3歩の $J(U_m)$ への固定の射影（`Trainer._project` に入れる）と，§8.3 の答えの型をラベルにする学習である．
 
 ## 研究文書の記述は，コードのどこか
 
@@ -206,7 +268,7 @@ scripts/
 | $\mathcal{L}_{\mathrm{align}}$（§3.2） | `losses.supervised_contrastive_loss`——対角を `-inf` にした `pairwise_cosine(features) * logit_scale` に `logsumexp` を取り，正例の平均を引く |
 | 温度 $\tau$（§3.2） | `LogitScale` が $1/\tau$ を log スケールで保持し 100 で clamp．初期値は `logit_scale.INIT_SCALE = 1/0.07` |
 | $\mathcal{L}_{\mathrm{LM}}$ のマスク（§3.2） | `SmolVLMProcessor._mask_labels`——プロンプト位置と `attention_mask == 0` の位置を `IGNORE_INDEX` に落とす |
-| 掛ける位置（§3.3） | `SmolVLM._pool`——`hidden_states[row, prompt_lens[row] - 1]` |
+| 掛ける位置（§3.3） | `SmolVLM._pool`——`hidden_states[row, prompt_lens[row] + position]`．`position` はプロンプトの末尾から数え，報告した実験は `-1`（`Settings.positions`） |
 | プローブが読む表現（§A.1） | 損失が使うのと**同一のテンソル**．`Trainer` が `set_cache("representation", …)` した値を `Evaluator.measure` がそのまま貯め，`representations.pt` に `(N, 1, H)` で落ちる．**評価ローダも `with_labels=True`**（`training/run.py` の共有 kwargs）で右詰め——左詰めだと `prompt_lens` が作られず，`_pool` の位置が意味を失う．生成は `decode_answers` が質問だけを左詰めに詰め直した別テンソルで行うので，表現には触れない |
 | 分離度 $\delta$ の $\sigma$（§4.4） | `metrics.cohens_d`——`torch.var` は不偏なので，文書の式どおり $n-1$ で割った分散から作る |
 | $\mathcal{P}$ と $\mathcal{N}$（§4.4） | `metrics.representation_stability`——対角を除いた類似度行列**全体**から取るので順序つき対になる．平均と分散は変わらない |
@@ -215,7 +277,9 @@ scripts/
 | 表現の幾何・損失・正解率の要約，崩壊値 $\log(B-1)$，1エポックのバッチ数と実行時間（§4.1・§4.4・§5.2） | `summarize_runs.py`——9 run の `eval.json`・`step_metrics.json`・`log.txt` を読み直すだけ．新しく測るものは無く，文書がしている算術をここでする |
 | $\bar{d}$・信頼区間（§4.3） | `analysis/statistics.py`——係数 $t_{n-1, 0.975}$ は表を引かずに求める．自由度2（乱数種3つ）は文書の 4.303 を与える閉じた式で，それ以外は不完全ベータ関数を数値的に逆に解く．区間が 0 を跨ぐか否かも保存する |
 | 頻度層別と層ごとの区間（§A.3） | `stratify_by_frequency.py` |
-| 整合の強さ・層を振った点（§8.4・§A.5） | `sweep.py` が点を作り，`summarize_sweep.py` が並べる——読み取り精度は §5.1 と同じ当てはめで測り直すので，既存の2点が §5.1・§5.2 の数値を再現することが，両者が同じものを測っている証拠になる |
+| 整合の強さ・層を振った点（§8.4・§A.5） | `sweep.py` が点を作り，`summarize_sweep.py` が並べる——読み取り精度は §5.1 と同じ当てはめで測り直すので，既存の2点が §5.1・§5.2 の数値を再現することが，両者が同じものを測っている証拠になる．各点の相対感度はマップ（次の行）から読み，強さの曲線は乱数種 42 の値だけで作って，幅 $m = 32$ の相対感度がどの段でも下がるかを残す |
+| 答えが依存する層と位置のマップ，掛ける位置の選択（§8.5 第1歩） | `probe_dependence_map.py`——§A.4 第3段と同じ方向・プロンプト・逆伝播で，全層の出力について勾配の長さを取る（`analysis/jacobian.py` の `vjp_everywhere`）．位置は，質問より前の70位置と質問文を先頭から，質問を読み終えた6位置を末尾から数えて揃える（`analysis/dependence.py`．70 と 5 は `SmolVLMProcessor.prompt_layout` がトークナイザで測る）．選択の規則は `choose_positions`，読む幅は `PRIMARY_DIM`．第16層の末尾の値を `probe-dependence.json` と突き合わせた差も残す |
+| 選んだ位置への掛け直しと，表の行（§8.5 第2歩） | `sweep.py position` が proposal と ablation を学習し，`probe_dependence_map.py position` がその位置の相対感度を測り，`summarize_relocation.py` が乱数種を対にした四つの差（相対感度と正解率の，proposal − baseline と proposal − ablation）から行を決める．掛けた位置の分離度も `eval.json` から並べる |
 | 「利用が伴っていない」の測定・第1段（§A.4） | `probe_bypass.py`——checkpoint の出力層から答えの**先頭トークン**の行を抜き，中心化した主成分 $m$ 本を $U$ とする．表現を $U$ の中と外へ射影して同じプローブを掛け，**中と外の両方**を同次元のランダム直交基底と比べる．部分空間の道具は `analysis/subspaces.py` にあり，第2段と共有する |
 | 「利用が伴っていない」の測定・第2段（§A.4） | `probe_bypass_pullback.py`——部分空間 $U$ の各方向をベクトル–ヤコビ積で第16層へ引き戻し（`SmolVLM.readout_from_site` が site と読み出しを微分可能なまま返す），直交化して $U$ の代わりに使う．引き戻す前後の cos も測る——1 に近ければ第1段の近似は正しかったことになる（実際は 0.2 台だった） |
 | 「利用が伴っていない」の測定・第3段（§A.4） | `probe_dependence.py`——同じベクトル–ヤコビ積の**長さ**を，第16層の表現と読み出しの大きさで割って無次元にし（相対感度），3群で比べる．第2段が正規直交化のときに捨てている量である．プロンプト本数の収束も同じ逆伝播から出す |
@@ -230,7 +294,8 @@ scripts/
 | データについて（分割・署名・演算子・語彙） | `audit_dataset.py` |
 | 9 run の記録について（幾何・損失・正解率・実行時間） | `summarize_runs.py` |
 | 保存済みの表現・距離に新しく問うこと | `probe_signature.py`・`probe_operators.py`・`probe_bypass.py`・`stratify_by_frequency.py`・`normalize_drift.py` |
-| 重みを走らせ直して新しく問うこと（引き戻し・相対感度・頑健性） | `probe_bypass_pullback.py`・`probe_dependence.py`・`probe_drift.py` |
+| 重みを走らせ直して新しく問うこと（引き戻し・相対感度・そのマップ・頑健性） | `probe_bypass_pullback.py`・`probe_dependence.py`・`probe_dependence_map.py`・`probe_drift.py` |
+| 報告した9 run の外の run について（強さ・層・位置を変えたもの） | `summarize_sweep.py`・`summarize_relocation.py` |
 | seed のまとめ方（平均・spread・区間） | `analysis/statistics.py`——上のどれもがここを通る |
 
 **要約統計を各スクリプトで書き直さない．** 平均・標準偏差・対にした差・信頼区間は `analysis/statistics.py` にしかない——二つのスクリプトが別々に区間を作れば，同じ文書の中で同じ括弧が二つの意味を持つ．

@@ -50,3 +50,9 @@ line-length = 100
 #   DTZ     timezone-naive datetime, which `utils.runtime` uses deliberately and says so
 #           with a `noqa` — a directive that names a rule nobody runs suppresses nothing
 extend-select = ["DTZ", "E501", "I", "RUF022"]
+
+[tool.ruff.lint.per-file-ignores]
+# The deck is written as the lines it shows and the XML PowerPoint reads: a slide's text
+# line is one string so its fit to the slide can be checked as a whole, and a part's
+# markup is easier to hold against the schema unbroken than folded at a column.
+"scripts/update_progress.py" = ["E501"]

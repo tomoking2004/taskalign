@@ -235,6 +235,12 @@ class Trainer(BaseTrainer):
                     "seed": self.seed,
                     "align_weight": self.align_weight,
                     "align_pairing": self.align_pairing,
+                    # Where the alignment was applied. The saved representations say
+                    # so too, but a run aligned at several positions saves a stack too
+                    # large to travel with its snapshot, and its report still has to
+                    # say what it was.
+                    "layers": list(self.vlm.layers or ()),
+                    "positions": list(self.vlm.positions),
                     "phase": phase.name,
                 },
                 "test_metrics": metrics,
@@ -255,25 +261,26 @@ class Trainer(BaseTrainer):
     def _alignment_loss(self, representation: torch.Tensor, batch: Batch) -> torch.Tensor:
         """Supervised-contrastive loss over same-task representations, `(B, L, H)` in.
 
-        Each constrained layer is scored on its own and the scores averaged, so a layer
-        is asked to separate signatures *within itself* — the claim the hypothesis makes
-        of every layer it is applied to. Concatenating the layers into one long vector
-        would instead ask a single question of the stack, and answer it mostly in
-        whichever layer has the largest norm; the residual stream grows through depth, so
-        that layer is knowable in advance and it is not the one anybody chose.
+        Each constrained site — a layer at a position — is scored on its own and the
+        scores averaged, so a site is asked to separate signatures *within itself* — the
+        claim the hypothesis makes of every site it is applied to. Concatenating the
+        layers into one long vector would instead ask a single question of the stack, and
+        answer it mostly in whichever layer has the largest norm; the residual stream
+        grows through depth, so that layer is knowable in advance and it is not the one
+        anybody chose.
 
-        The temperature is shared across layers: it is the strength of the constraint,
-        and holding it common is what makes the per-layer terms commensurable enough to
+        The temperature is shared across sites: it is the strength of the constraint,
+        and holding it common is what makes the per-site terms commensurable enough to
         average. Averaging (not summing) also keeps `align_weight` meaning the same thing
-        whether one layer is constrained or five.
+        whether one site is constrained or six.
         """
         labels = self._pair_labels(batch["task_signatures"], batch["question_ids"])
         logit_scale = self.logit_scale()
-        per_layer = torch.stack([
-            supervised_contrastive_loss(self._project(layer), labels, logit_scale)
-            for layer in representation.unbind(dim=1)
+        per_site = torch.stack([
+            supervised_contrastive_loss(self._project(site), labels, logit_scale)
+            for site in representation.unbind(dim=1)
         ])
-        return per_layer.mean()
+        return per_site.mean()
 
     def _project(self, representation: torch.Tensor) -> torch.Tensor:
         """Subspace seam for the alignment target — identity for now.

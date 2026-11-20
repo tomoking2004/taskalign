@@ -130,6 +130,28 @@ class SmolVLMProcessor:
         """Token ids back to text, without the special tokens."""
         return self._processor.batch_decode(token_ids, skip_special_tokens=True)
 
+    def prompt_layout(self) -> tuple[int, int]:
+        """How many prompt tokens come before the question, and how many after it.
+
+        The chat template wraps every question the same way — a fixed head (the turn
+        marker and the image) and a fixed tail (the end of the turn and the cue for the
+        answer) — so a position counted from the head or from the tail means the same
+        token in every prompt, and only the question in between varies in length.
+        Measured against the tokenizer rather than counted by hand, for the reason
+        `_measure_image_expansion` is: the template is the checkpoint's to define.
+        """
+        tokenizer = self._processor.tokenizer
+        one, other = (
+            tokenizer(self._build_prompt(text, None), add_special_tokens=True).input_ids
+            for text in ("Is it red?", "Who holds the cup")
+        )
+        head = next(i for i, (a, b) in enumerate(zip(one, other, strict=False)) if a != b)
+        tail = next(
+            i for i, (a, b) in enumerate(zip(reversed(one), reversed(other), strict=False))
+            if a != b
+        )
+        return head + self._image_expansion, tail
+
     def _build_prompt(self, text: str, target: str | None) -> str:
         messages: list[dict[str, Any]] = [
             {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": text}]}
@@ -191,20 +213,28 @@ class SmolVLM(nn.Module):
     """SmolVLM, reporting a pooled representation per sample alongside its loss.
 
     `layers` names the transformer blocks whose hidden states are read — one, or several
-    in the order given — and the position is the last prompt token. Which layers and
-    which position to align is the study's central lever, so the model owns it:
-    everything downstream — the alignment loss and the stability metrics alike — is
-    defined over the ``(B, L, H)`` stack this returns, and none of them gets to choose
-    it. The layer axis is always there, single layer or not, so nothing downstream has
-    to branch on how many were asked for. Leave `layers` unset and no representation is
-    produced (nor are hidden states even computed).
+    in the order given — and `positions` the prompt tokens they are read at, counted back
+    from the prompt's end: -1 is the last prompt token, the one the reported experiment
+    aligns, and -2 the token before it. Which layers and which positions to align is the
+    study's central lever, so the model owns it: everything downstream — the alignment
+    loss and the stability metrics alike — is defined over the ``(B, L, H)`` stack this
+    returns, and none of them gets to choose it. The stack has one slice per site — each
+    layer at each position, layer-major — and is there even for a single site, so nothing
+    downstream has to branch on how many were asked for. Leave `layers` unset and no
+    representation is produced (nor are hidden states even computed).
     """
 
     _model: PreTrainedModel
 
-    def __init__(self, size: Size = "500M", layers: int | Sequence[int] | None = None) -> None:
+    def __init__(
+        self,
+        size: Size = "500M",
+        layers: int | Sequence[int] | None = None,
+        positions: Sequence[int] = (-1,),
+    ) -> None:
         super().__init__()
         self.layers = _as_layers(layers)
+        self.positions = _as_positions(positions)
 
         # Both are recorded with the run, so both are resolved once here and kept
         # rather than re-derived at the point of recording: `_attn_implementation`
@@ -314,17 +344,27 @@ class SmolVLM(nn.Module):
         representation = None
         if self.layers is not None and prompt_lens is not None:
             representation = torch.stack(
-                [self._pool(out.hidden_states[layer], prompt_lens) for layer in self.layers],
+                [
+                    self._pool(out.hidden_states[layer], prompt_lens, position)
+                    for layer in self.layers
+                    for position in self.positions
+                ],
                 dim=1,
             )
         return VLMOutput(loss=out.loss, representation=representation)
 
     @staticmethod
-    def _pool(hidden_states: torch.Tensor, prompt_lens: list[int]) -> torch.Tensor:
-        """The hidden state at each row's last prompt token — (B, T, H) → (B, H)."""
+    def _pool(
+        hidden_states: torch.Tensor, prompt_lens: list[int], position: int = -1
+    ) -> torch.Tensor:
+        """The hidden state `position` back from each row's prompt end — (B, T, H) → (B, H).
+
+        -1 is the last prompt token. Rows are right-padded behind their answers, so the
+        prompt's end is `prompt_lens`, not the row's.
+        """
         rows = torch.arange(len(prompt_lens), device=hidden_states.device)
-        last = torch.tensor(prompt_lens, device=hidden_states.device) - 1
-        return hidden_states[rows, last]
+        at = torch.tensor(prompt_lens, device=hidden_states.device) + position
+        return hidden_states[rows, at]
 
     def readout_from_site(
         self,
@@ -341,22 +381,50 @@ class SmolVLM(nn.Module):
         `representation` cannot serve here. Its layer axis holds one pooled *copy* per
         constrained layer, and those copies are siblings rather than parent and child: the
         last layer's copy is not computed from the sixteenth's, so nothing can be
-        differentiated between them. This hands back the interior instead, and it is the
-        only thing in the class that does. It exists for one measurement — pulling the
-        output layer's directions back to the constrained site (context.md §A.4).
+        differentiated between them. This hands back the interior instead. It exists for
+        one measurement — pulling the output layer's directions back to the constrained
+        site (context.md §A.4).
 
         The site is returned unpooled because a gradient with respect to one row cannot be
         asked for from that row alone: the differentiation target has to be the tensor
-        autograd knows, so the caller takes the row it wants out of the gradient. The
-        readout *is* pooled, at the last prompt token, because it is an output rather than
-        a target. It comes from the last hidden state, which is what the output layer is
-        applied to — after the final normalisation, not before.
+        autograd knows, so the caller takes the row it wants out of the gradient.
         """
         if self.layers is None:
             raise ValueError(
                 "No constrained layer to differentiate towards: build the model with one, "
                 "e.g. build_smolvlm('500M', layers=16)."
             )
+        hidden_states, readout = self.readout_from_layers(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            pixel_values=pixel_values,
+            pixel_attention_mask=pixel_attention_mask,
+            prompt_lens=prompt_lens,
+        )
+        return hidden_states[self.layers[0]], readout
+
+    def readout_from_layers(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        pixel_values: torch.Tensor,
+        pixel_attention_mask: torch.Tensor | None = None,
+        *,
+        prompt_lens: list[int],
+    ) -> tuple[tuple[torch.Tensor, ...], torch.Tensor]:
+        """Every hidden state, and the vector the output layer reads, with the graph
+        running from each of the first to the second — `depth + 1` of `(B, T, H)`, and
+        `(B, H)`.
+
+        Indexed as `hidden_states` is: element `l` is block `l`'s output, and element 0
+        the embedding. All of them come from one forward, so one backward from the
+        readout reaches every layer and every position at once — which is what lets the
+        dependence be mapped (context.md §8.5) at the cost of measuring it at one site.
+
+        The readout is pooled, at the last prompt token, because it is an output rather
+        than a target. It comes from the last hidden state, which is what the output layer
+        is applied to — after the final normalisation, not before.
+        """
         with self._autocast():
             out = self._model(
                 input_ids=input_ids,
@@ -365,7 +433,7 @@ class SmolVLM(nn.Module):
                 pixel_attention_mask=pixel_attention_mask,
                 output_hidden_states=True,
             )
-        return out.hidden_states[self.layers[0]], self._pool(out.hidden_states[-1], prompt_lens)
+        return tuple(out.hidden_states), self._pool(out.hidden_states[-1], prompt_lens)
 
     @torch.inference_mode()
     def generate(
@@ -417,9 +485,27 @@ def _as_layers(layers: int | Sequence[int] | None) -> tuple[int, ...] | None:
     return chosen
 
 
+def _as_positions(positions: Sequence[int]) -> tuple[int, ...]:
+    """The prompt positions to read, as offsets back from the prompt's end.
+
+    Offsets rather than indices, because a prompt's length varies with its question and
+    its tail does not: -1 is the same token of the chat template in every prompt, and an
+    index is not. Zero and above would point past the prompt, into the answer.
+    """
+    chosen = tuple(positions)
+    if not chosen:
+        raise ValueError("`positions` is empty; the last prompt token is (-1,).")
+    if any(position >= 0 for position in chosen):
+        raise ValueError(f"`positions` count back from the prompt's end: {chosen}.")
+    if len(set(chosen)) != len(chosen):
+        raise ValueError(f"`positions` repeats a position: {chosen}.")
+    return chosen
+
+
 def build_smolvlm(
     size: Size = "500M",
     layers: int | Sequence[int] | None = None,
+    positions: Sequence[int] = (-1,),
 ) -> tuple[SmolVLM, SmolVLMProcessor]:
-    """A SmolVLM of `size` reading `layers`, and the processor that goes with it."""
-    return SmolVLM(size, layers=layers), SmolVLMProcessor(size)
+    """A SmolVLM of `size` reading `layers` at `positions`, and its processor."""
+    return SmolVLM(size, layers=layers, positions=positions), SmolVLMProcessor(size)
