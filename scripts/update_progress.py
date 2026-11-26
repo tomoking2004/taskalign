@@ -1,13 +1,15 @@
 """Build the 27 November progress report from whatever `analyses/` holds. No torch.
 
-The deck presents the plan of context.md §8 — map where the answer depends, vary the
-alignment weight, realign where the dependence is largest — one slide a step, and each
-step's result on the slides after it once that result is on file, between an opening
-slide that says what was done since the last report (and how many of the realigned runs
-have trained, counted from git's index) and a closing one that gathers the readings. So
-the same command writes the plan before anything has run and the report after: the job
-that runs the experiment (`scripts/run_plan.sh`) calls it after every stage, and pulling
-its commits is what updates the deck.
+The deck runs in one order: what was done since the last report, the questions taken at
+the conference, what the language model is given and which positions the experiments
+name, why the alignment may go unused, and the five experiments of context.md §8 with
+where each stands. Then every experiment with a result on file gets its result slides,
+each opening on why it is looked at and saying how it was measured, and the experiments
+without one share a single "今後" slide that gives their methods alone, so no slide
+promises a result that is not there; a closing slide gathers the readings. The same
+command writes the deck before anything has run and after: the job that runs the
+experiments (`scripts/run_plan.sh`) calls it after every stage, and pulling its commits
+is what updates the deck.
 
 What a result slide says is not composed here. Where the research document fixed an
 outcome's meaning before the runs existed, the analyses name the outcome they fell in and
@@ -19,9 +21,11 @@ The document still has to be brought up to the same results by hand — a slide 
 here is ahead of it until then.
 
 The package is written at the level of its parts, from the parts of an earlier report
-(principles.md §5): the lab's template, 游明朝, 24pt body lines, the template's table
-style, and red for the one conclusion a slide draws. Standard library only, so it runs on
-the machine that trained the runs and on the one that opens the deck alike.
+(principles.md §5): the lab's template, 游明朝, 24pt body lines, and the template's table
+style. Colour comes from the poster's greens alone — the tables' fill, the map, and the
+bold deep green of the one conclusion a slide draws (principles.md §4). Standard library
+only, so it runs on the machine that trained the runs and on the one that opens the deck
+alike.
 
     python scripts/update_progress.py [OUT.pptx [ANALYSES_DIR]]
 
@@ -36,7 +40,6 @@ import json
 import math
 import re
 import struct
-import subprocess
 import sys
 import zipfile
 import zlib
@@ -53,16 +56,21 @@ OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "presentations" / "2026
 EMU = 914400
 FONT = "游明朝"
 MATH = "Cambria Math"
-INK, RED, WHITE = "000000", "FF0000", "FFFFFF"
-TABLE_STYLE = "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"  # 雛形の表の様式
-BODY, TABLE = 2400, 1800  # 本文と表の字の大きさ（1/100 pt）
+INK, WHITE = "000000", "FFFFFF"
+# 色はポスターの緑の濃淡だけで組む（principles.md §4）．PALE は表の地，MID はマップの中間と表の見出しの地，
+# DEEP はマップの最も濃い色．結論の字（ACCENT）はポスターの基調の緑で，DEEP では暗くて目立たない．
+PALE, MID, DEEP = "E2EFDA", "8FBF78", "2E6B34"
+ACCENT = "4A8C45"
+TABLE_STYLE = "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"  # 雛形の表の様式．地の色だけを上の緑で塗り替える
+BODY, SUB, TABLE = 2400, 2000, 1800  # 本文，二段目の箇条，表の字の大きさ（1/100 pt）
+TABLE_HANG = 0.25  # 表の中の箇条の記号を左に出す幅（インチ）：18pt の一字分
 DIAG = TABLE  # 模式図の中の語（principles.md §3：表と図は 14pt 以上）
+SMALL = 1400  # 図の中のトークンの文字列（表と図の下限の 14pt）
 TOKEN, PITCH = 0.3, 0.42  # トークンの正方形の一辺と，並べる間隔（インチ）
 X0, W = 0.92, 11.5  # 本文の左端と幅（雛形の題と同じ）
 Y0, GAP = 1.8, 0.25  # 本文の始まりと，塊どうしの間隔（principles.md §4）
-
-# ③で学習する run の数：proposal と ablation を乱数種3つで（研究文書 §8.5 第2歩）
-RELOCATED_RUNS = 6
+BOTTOM = 7.0  # 本文の下端：スライドの高さ 7.5 インチから，端の 0.5 インチを除く
+INDENT = {0: 0.0, 1: 0.35, 2: 0.8}  # 箇条の段ごとの左の余白（インチ）．記号は 0.35 だけ左に出す
 
 NS = (
     'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
@@ -86,11 +94,11 @@ def line_h(sz: int) -> float:
 
 
 def fits(text: str, sz: int, width: float) -> None:
-    """折り返しを描く環境に任せない：幅の 94% に収まらない行を見つけたら止める．"""
-    text = typeset(text)  # run() と同じ字で測る
-    w = text_width(text, sz)
-    if w > 0.94 * width:
-        raise SystemExit(f"収まらない（{w:.2f} > {0.94 * width:.2f}in）：{text}")
+    """折り返しを描く環境に任せない：幅の 94% に収まらない行を見つけたら止める．改行（\\n）で割った行ごとに測る．"""
+    for line in typeset(text).split("\n"):  # run() と同じ字で測る
+        w = text_width(line, sz)
+        if w > 0.94 * width:
+            raise SystemExit(f"収まらない（{w:.2f} > {0.94 * width:.2f}in）：{line}")
 
 
 def faces(text: str) -> list[tuple[str, str]]:
@@ -99,37 +107,49 @@ def faces(text: str) -> list[tuple[str, str]]:
 
 
 # _TOUCHING はラテン文字の語（と 𝒉）が仮名・漢字に接する所．数の後の pt は単位なので除く．
-# 数字と約物はどちらの字にも数えないので，その隣には空白を入れない．_CIRCLED は丸数字の後ろの空白．
+# 数字と約物はどちらの字にも数えないので，その隣には空白を入れない．_CIRCLED は丸数字の後ろで，
+# 次が空白・約物・範囲の – でない所（「③–⑤」「①・②」には入れない）．
 _KANA_KANJI = "ぁ-ゖァ-ヺ一-鿿"
 _TOUCHING = re.compile(rf"(?<=[A-Za-z𝒉])(?<!\dpt)(?=[{_KANA_KANJI}])|(?<=[{_KANA_KANJI}])(?=[A-Za-z𝒉])")
-_CIRCLED = re.compile("(?<=[①-⑳]) ")
+_CIRCLED = re.compile("(?<=[①-⑳])(?=[^\\s・，．（）「」–])")
 
 
 def typeset(text: str) -> str:
-    """principles.md §3 の空白：ラテン文字の語と和文の間に一つ入れ，丸数字の後ろの空白は除く．
+    """principles.md §3 の空白：ラテン文字の語と和文の間と，丸数字の後ろに一つ入れる．
 
-    位置の名を文に差し込むと語の境が詰まりうるので，書いた文でなく，組むときに揃える．
+    位置の名や手順の番号を文に差し込むと語の境が詰まりうるので，書いた文でなく，組むときに揃える．
     """
-    return _CIRCLED.sub("", _TOUCHING.sub(" ", text))
+    return _CIRCLED.sub(" ", _TOUCHING.sub(" ", text))
 
 
 def run(text: str, sz: int = BODY, *, color: str = INK, bold: bool = False) -> str:
-    """一続きの文字．空白を typeset で整え，書体ごとに run を分ける．"""
-    text = typeset(text)
-    return "".join(
-        f'<a:r><a:rPr lang="ja-JP" sz="{sz}" b="{int(bold)}" i="0">'
-        f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
-        f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/><a:cs typeface="{face}"/>'
-        f"</a:rPr><a:t>{escape(part)}</a:t></a:r>"
-        for part, face in faces(text)
-    )
+    """一続きの文字．空白を typeset で整え，書体ごとに run を分ける．
+
+    改行（\\n）は段落の中の改行にする：続きの行は段落の字下げを保つので，箇条の続きが新しい項目に見えない．
+    """
+    def piece(line: str) -> str:
+        return "".join(
+            f'<a:r><a:rPr lang="ja-JP" sz="{sz}" b="{int(bold)}" i="0">'
+            f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+            f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/><a:cs typeface="{face}"/>'
+            f"</a:rPr><a:t>{escape(part)}</a:t></a:r>"
+            for part, face in faces(line)
+        )
+
+    return f'<a:br><a:rPr lang="ja-JP" sz="{sz}"/></a:br>'.join(piece(line) for line in typeset(text).split("\n"))
 
 
-def para(runs: str, *, algn: str = "l", sz: int = BODY, before: int = 0) -> str:
-    """一つの段落．before は前の段落との間隔（1/100 pt）．"""
+def para(runs: str, *, algn: str = "l", sz: int = BODY, before: int = 0, left: float = 0.0,
+         hang: float = 0.0) -> str:
+    """一つの段落．before は前の段落との間隔（1/100 pt），left は左の余白（インチ）．
+
+    hang が正なら「・」の箇条にし，記号をその幅だけ左に出す．
+    """
+    bullet = f'<a:buFont typeface="{FONT}"/><a:buChar char="・"/>' if hang else "<a:buNone/>"
     return (
-        f'<a:p><a:pPr algn="{algn}" marL="0" indent="0"><a:lnSpc><a:spcPct val="100000"/></a:lnSpc>'
-        f'<a:spcBef><a:spcPts val="{before}"/></a:spcBef><a:buNone/></a:pPr>{runs}'
+        f'<a:p><a:pPr algn="{algn}" marL="{emu(left)}" indent="{-emu(hang)}">'
+        f'<a:lnSpc><a:spcPct val="100000"/></a:lnSpc>'
+        f'<a:spcBef><a:spcPts val="{before}"/></a:spcBef>{bullet}</a:pPr>{runs}'
         f'<a:endParaRPr lang="ja-JP" sz="{sz}"/></a:p>'
     )
 
@@ -167,16 +187,21 @@ class Slide:
             f'<a:prstGeom prst="{geom}"><a:avLst/></a:prstGeom>{f}{ln}</p:spPr>{tx}</p:sp>'
         )
 
-    def text(self, lines: list[tuple[str, int, str]], *, x: float = X0, w: float = W, y: float | None = None,
+    def text(self, lines: list[tuple[str, int, str] | tuple[str, int, str, int]], *, x: float = X0, w: float = W, y: float | None = None,
              algn: str = "l", gap_after: float = GAP, pad: float = 0.1) -> float:
-        """行の並び（文字，大きさ，色）．行どうしは 9pt 空ける（principles.md §4 の一段目の間隔）．"""
-        for t, sz, _ in lines:
-            fits(t, sz, w - 2 * pad)
+        """行の並び（文字，大きさ，色[，段]）．段 1 は箇条，段 2 はその下の箇条．
+
+        行どうしは，二段目の箇条の前を 3pt，ほかを 9pt 空ける（principles.md §4）．結論の色 ACCENT の行は太字にする
+        （principles.md §3 の強調の項）．文字の中の改行（\\n）は，同じ段落の続きの行にする．
+        """
         ps, h = [], 0.0
-        for k, (t, sz, color) in enumerate(lines):
-            before = 0 if k == 0 else 900
-            ps.append(para(run(t, sz, color=color), algn=algn, sz=sz, before=before))
-            h += line_h(sz) + before / 100 / 72
+        for k, line in enumerate(lines):
+            t, sz, color, level = (*line, 0)[:4]
+            fits(t, sz, w - 2 * pad - INDENT[level])
+            before = 0 if k == 0 else 300 if level == 2 else 900
+            ps.append(para(run(t, sz, color=color, bold=color == ACCENT), algn=algn, sz=sz, before=before,
+                           left=INDENT[level], hang=INDENT[1] if level else 0.0))
+            h += (t.count("\n") + 1) * line_h(sz) + before / 100 / 72
         if y is None:
             y = self.y
             self.y = y + h + gap_after
@@ -186,10 +211,10 @@ class Slide:
 
     def box(self, x: float, y: float, w: float, h: float, lines: list[str] | None = None, *,
             fill: str | None = None, line: str | None = INK, algn: str = "ctr", sz: int = BODY, pad: float = 0.15,
-            geom: str = "rect") -> None:
+            geom: str = "rect", color: str = INK) -> None:
         for t in lines or []:
             fits(t, sz, w - 2 * pad)
-        body = "".join(para(run(t, sz), algn=algn, sz=sz) for t in lines) if lines else ""
+        body = "".join(para(run(t, sz, color=color), algn=algn, sz=sz) for t in lines) if lines else ""
         self._sp(x, y, w, h, fill=fill, line=line, body=body, pad=pad, geom=geom)
 
     def label(self, x: float, y: float, w: float, t: str, *, algn: str = "ctr", sz: int = DIAG) -> None:
@@ -223,33 +248,51 @@ class Slide:
             f'<a:ln w="15875"><a:solidFill><a:srgbClr val="{INK}"/></a:solidFill></a:ln></p:spPr></p:pic>'
         )
 
-    def table(self, cols: list[float], rows: list[list[str]], *, row_h: float = 0.45, center: tuple[int, ...] = (),
-              bold: tuple[tuple[int, int], ...] = ()) -> None:
-        """雛形の表の様式．見出しの行は accent1 の 40%，ほかの行は 20%（これまでの進捗報告と同じ）．
+    def table(self, cols: list[float], rows: list[list[str | list[str] | None]], *,
+              center: tuple[int, ...] = (), bold: tuple[tuple[int, int], ...] = ()) -> None:
+        """雛形の表の様式で，地をポスターの緑で塗る：見出しの行は MID，ほかの行は PALE（principles.md §4）．
 
-        bold は太字にするセル（行，列）．区間が 0 を含まない差に使う（principles.md §2）．
+        セルは文字か，文字の並びか，None．並びは一つずつ「・」の箇条にする——一つのセルに項目を改行で並べると，
+        文の折り返しと見分けられない（principles.md §3）．文字の中の改行（\\n）は，同じ文の続きの行にする．
+        None は上のセルと縦に結合する（同じ群の行を一つのセルで括る．principles.md §3 の表の項）．
+        行の高さは，行の中で最も行数の多いセルに合わせる（結合したセルは一行と数える）．bold は太字にするセル
+        （行，列）．区間が 0 を含まない差に使う（principles.md §2）．
         """
+        items = [[[] if cell is None else [cell] if isinstance(cell, str) else cell for cell in row] for row in rows]
+        heights = [max(sum(t.count("\n") + 1 for t in cell) for cell in row) * line_h(TABLE) + 0.095 for row in items]
+
+        def span(r: int, c: int) -> int:
+            """r 行 c 列のセルが，下の None をいくつ括るか（自身を含む行数）．"""
+            n = 1
+            while r + n < len(rows) and rows[r + n][c] is None:
+                n += 1
+            return n
+
         i = self._id()
-        y = self.take(row_h * len(rows))
+        y = self.take(sum(heights))
         trs = []
-        for r, row in enumerate(rows):
-            shade = ('<a:lumMod val="40000"/><a:lumOff val="60000"/>' if r == 0
-                     else '<a:lumMod val="20000"/><a:lumOff val="80000"/>')
+        for r, row in enumerate(items):
             tcs = []
             for c, cell in enumerate(row):
-                fits(cell, TABLE, cols[c] - 0.16)
                 algn = "ctr" if r == 0 or c in center else "l"
+                hang = TABLE_HANG if isinstance(rows[r][c], list) else 0.0
+                ps = []
+                for t in cell:
+                    fits(t, TABLE, cols[c] - 0.16 - hang)
+                    ps.append(para(run(t, TABLE, bold=(r, c) in bold), algn=algn, sz=TABLE, left=hang, hang=hang))
+                merge = ' vMerge="1"' if rows[r][c] is None else f' rowSpan="{span(r, c)}"' if span(r, c) > 1 else ""
                 tcs.append(
-                    f"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/>{para(run(cell, TABLE, bold=(r, c) in bold), algn=algn, sz=TABLE)}</a:txBody>"
-                    f'<a:tcPr anchor="ctr" marL="73152" marR="73152"><a:solidFill><a:schemeClr val="accent1">{shade}'
-                    "</a:schemeClr></a:solidFill></a:tcPr></a:tc>"
+                    f"<a:tc{merge}><a:txBody><a:bodyPr/><a:lstStyle/>"
+                    f"{''.join(ps) or '<a:p><a:endParaRPr lang=\"ja-JP\"/></a:p>'}</a:txBody>"
+                    f'<a:tcPr anchor="ctr" marL="73152" marR="73152" marT="27432" marB="27432">'
+                    f'<a:solidFill><a:srgbClr val="{MID if r == 0 else PALE}"/></a:solidFill></a:tcPr></a:tc>'
                 )
-            trs.append(f'<a:tr h="{emu(row_h)}">{"".join(tcs)}</a:tr>')
+            trs.append(f'<a:tr h="{emu(heights[r])}">{"".join(tcs)}</a:tr>')
         grid = "".join(f'<a:gridCol w="{emu(c)}"/>' for c in cols)
         self.shapes.append(
             f'<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{i}" name="Table {i}"/>'
             '<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>'
-            f'<p:xfrm><a:off x="{emu(X0 + (W - sum(cols)) / 2)}" y="{emu(y)}"/><a:ext cx="{emu(sum(cols))}" cy="{emu(row_h * len(rows))}"/></p:xfrm>'
+            f'<p:xfrm><a:off x="{emu(X0 + (W - sum(cols)) / 2)}" y="{emu(y)}"/><a:ext cx="{emu(sum(cols))}" cy="{emu(sum(heights))}"/></p:xfrm>'
             '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">'
             f'<a:tbl><a:tblPr firstRow="1" bandRow="0"><a:tableStyleId>{TABLE_STYLE}</a:tableStyleId></a:tblPr>'
             f'<a:tblGrid>{grid}</a:tblGrid>{"".join(trs)}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>'
@@ -258,6 +301,7 @@ class Slide:
     def xml(self) -> str:
         set_title = typeset(self.title)
         assert text_width(set_title, 4400) < 11.0, self.title  # 題は一行（44pt で約18字まで）
+        assert self.y - GAP <= BOTTOM + 1e-6, f"本文が下端を越える（{self.y - GAP:.2f}in）：{self.title}"
         title = (
             '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
             '<p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>'
@@ -274,7 +318,69 @@ class Slide:
         )
 
 
-# ---------------------------------------------------------------- スライド
+# ---------------------------------------------------------------- 図の部品
+
+
+def tokens(s: Slide, x: float, y: float, n: int, *, last_h: bool = False, dots: bool = False) -> list[float]:
+    """横に並ぶ n 個のトークンの正方形．白地に墨の線で，last_h なら最後の一つを 𝒉 として墨で塗る．
+
+    dots なら，最後の一つの手前に縦の点の代わりの「…」を一つ分置き，略したトークンを示す．各正方形の左端の x を返す．
+    """
+    slots = [x + k * PITCH for k in range(n + dots)]
+    xs = slots[:n - 1] + slots[-1:] if dots else slots
+    if dots:
+        s.label(slots[n - 1] - 0.1, y - 0.04, TOKEN + 0.2, "…")
+    for k, xk in enumerate(xs):
+        s.box(xk, y, TOKEN, TOKEN, fill=INK if last_h and k == n - 1 else WHITE)
+    return xs
+
+
+# 質問を読み終えた6位置の，図での名．プロンプトの末尾から数えた位置で引く（研究文書 §8.5 の並び）．
+# 文と表では，place が最後の位置を今の 𝒉 と呼ぶ．
+ENDING = {-6: "質問文の末尾", -5: "<end_of_utterance>", -4: "改行", -3: "Ass", -2: "istant", -1: ":"}
+
+
+def ending_widths() -> list[float]:
+    """ending_row の箱の幅．字が幅の 94% に収まる幅に左右の余白を足し，0.6 インチを下限とする．"""
+    return [max(text_width(typeset(t), DIAG) / 0.94 + 0.3, 0.6) for t in ENDING.values()]
+
+
+def ending_span() -> tuple[float, float]:
+    """ending_row が並べる箱の左端と右端の x．"""
+    span = sum(ending_widths()) + 0.1 * (len(ENDING) - 1)
+    return X0 + (W - span) / 2, X0 + (W + span) / 2
+
+
+def ending_row(s: Slide, y: float) -> None:
+    """質問を読み終えた6位置を，トークンの文字を入れた箱で横に並べる．最後の一つ（今の 𝒉）は墨で塗る．"""
+    x = ending_span()[0]
+    for k, (t, w) in enumerate(zip(ENDING.values(), ending_widths(), strict=True)):
+        last = k == len(ENDING) - 1
+        s.box(x, y, w, 0.45, [t], sz=DIAG, fill=INK if last else WHITE, color=WHITE if last else INK, pad=0.1)
+        x += w + 0.1
+    s.label(x + 0.02, y + 0.04, 1.1, "今の 𝒉", algn="l")
+
+
+def axes(s: Slide, x: float, y: float, title: str, groups: list[tuple[float, float, str, str]], *,
+         h: float = 2.05) -> None:
+    """𝒉 の空間の模式．縦は答えを動かす方向，横は動かさない方向．groups は（横，縦，塗り，名）の手順の塊．
+
+    h は題の行の上端から横軸までの高さ．
+    """
+    s.label(x, y, 5.4, title, algn="l")
+    ox, oy = x + 0.3, y + h
+    s.line(ox, oy, ox, y + 0.45)
+    s.line(ox, oy, x + 5.2, oy)
+    s.label(ox + 0.12, y + 0.42, 2.6, "答えを動かす方向", algn="l")
+    s.label(x + 2.6, oy + 0.06, 2.6, "動かさない方向", algn="r")
+    for gx, gy, fill, name in groups:
+        cx, cy = ox + gx, oy - gy
+        for dx, dy in ((0.0, 0.0), (0.3, 0.12), (0.12, -0.2)):
+            s.box(cx + dx, cy + dy, 0.2, 0.2, fill=fill, geom="ellipse")
+        s.label(cx + 0.6, cy - 0.04, 1.2, name, algn="l")
+
+
+# ---------------------------------------------------------------- 前置きと計画
 
 
 def cover() -> str:
@@ -299,218 +405,143 @@ def cover() -> str:
     )
 
 
-def tokens(s: Slide, x: float, y: float, n: int, *, last_h: bool = False) -> list[float]:
-    """横に並ぶトークンの正方形．白地に墨の線で，last_h なら最後の一つを 𝒉 として墨で塗る．各々の左端の x を返す．"""
-    xs = [x + k * PITCH for k in range(n)]
-    for k, xk in enumerate(xs):
-        h = last_h and k == n - 1
-        s.box(xk, y, TOKEN, TOKEN, fill=INK if h else WHITE)
-    return xs
+# 研究文書 §8 の順の5つの手順と，行ったときに「今回したこと」で言う文
+STEPS = (
+    "① 答えが依存する層と位置を測る",
+    "② 整合の強さ λ を変える",
+    "③ 掛ける層を変え，乱数種5つで学習し直す",
+    "④ 依存の大きい位置に整合を掛け直す",
+    "⑤ 答えを動かす方向に限って整合を掛ける",
+)
+DID = (
+    "答えが，どの層・位置の表現に依存するかを測った",
+    "整合の強さ λ を変えて学習し，効果を比べた",
+    "掛ける層を変えて学習し直し，第16層と比べた",
+    "整合を掛ける位置を変えて学習し，効果を比べた",
+    "答えを動かす方向に限って整合を掛け，効果を比べた",
+)
 
 
-def axes(s: Slide, x: float, y: float, title: str, groups: list[tuple[float, float, str, str]], *,
-         h: float = 2.05) -> None:
-    """𝒉 の空間の模式．縦は答えを動かす方向，横は動かさない方向．groups は（横，縦，塗り，名）の手順の塊．
+def s_done(done: tuple[bool, ...]) -> Slide:
+    """前回からの差分（principles.md §2）．したことだけを言い，途中まで学習した本数は言わない．
 
-    h は題の行の上端から横軸までの高さ．
+    学会の質問から立てたのは①②④⑤の4つで，③は，学会で示した結果が第16層の外でも成り立つかを
+    確かめるために本人が足した（研究文書 §8 の冒頭）．
     """
-    s.label(x, y, 5.4, title, algn="l")
-    ox, oy = x + 0.3, y + h
-    s.line(ox, oy, ox, y + 0.45)
-    s.line(ox, oy, x + 5.2, oy)
-    s.label(ox + 0.12, y + 0.42, 2.6, "答えを動かす方向", algn="l")
-    s.label(x + 2.6, oy + 0.06, 2.6, "動かさない方向", algn="r")
-    for gx, gy, fill, name in groups:
-        cx, cy = ox + gx, oy - gy
-        for dx, dy in ((0.0, 0.0), (0.3, 0.12), (0.12, -0.2)):
-            s.box(cx + dx, cy + dy, 0.2, 0.2, fill=fill, geom="ellipse")
-        s.label(cx + 0.6, cy - 0.04, 1.2, name, algn="l")
-
-
-def s_done(measured: bool, swept: bool, trained: int) -> Slide:
-    """前回からの差分（principles.md §2）．手順の番号はまだ出ていないので，手順の名で言う．"""
     s = Slide("今回したこと")
-    lines = ["学会での質問と，使われない理由の候補から，4つの手順を立てた"]
-    if measured or swept:
-        lines += [t for t, d in (("測定：答えが依存する層と位置のマップ", measured),
-                                 ("学習と測定：整合の強さを変えた3本", swept)) if d]
-    if 0 < trained < RELOCATED_RUNS:
-        lines.append(f"依存の大きい位置への掛け直し：{RELOCATED_RUNS}本中{trained}本を学習")
-    s.text([(t, BODY, INK) for t in lines])
+    lines = [("学会で受けた質問をもとに，4つの実験を計画した", BODY, INK, 1)]
+    did = [t for t, d in zip(DID, done, strict=True) if d]
+    if did:
+        lines.append((f"そのうち{len(did)}つを行った", BODY, INK, 1))
+        lines += [(t, SUB, INK, 2) for t in did]
+    lines.append(("学会の結果が層によらないかを確かめる実験を，計画に加えた", BODY, INK, 1))
+    s.text(lines)
     return s
 
 
 def s_questions() -> Slide:
-    s = Slide("学会での質問と応え方")
-    s.text([("要旨は発表者の聞き取り", BODY, INK)])
+    """質疑の記録（presentations/20261116_PCSJ-IMPS2026_質疑.md）の聞き取りを，意味を保って言い直す（principles.md §2）．
+
+    質問は一つの文の続きとして句読点の後で折り，応え方は項目ごとの箇条にする（principles.md §3 の表の項）．
+    応え方には，聴き手の判断に関わらない実装の事情を書かない（principles.md §1）．
+    """
+    s = Slide("学会で受けた質問と応え方")
+    s.text([("今回の実験は，学会で受けた次の質問から立てた", BODY, INK)])
     s.table(
-        [0.7, 5.4, 5.4],
+        [6.3, 5.2],
         [
-            ["番号", "質問の要旨", "応え方"],
-            ["1", "causal attention が悪さをしたのでは", "答えが依存する層と位置を測る"],
-            ["2", "整合の強さ λ と層を増やせば変わるのでは", "λ を変え，層も1つずつ変えて測る"],
-            ["3", "発火を調べ，整合を掛ける位置を決めては", "依存の大きい位置に整合を掛け直す"],
-            ["4", "𝒉 に Attention の Q が出るか（曖昧）", "𝒉 は Q を作る元．要旨が不確かで測らず"],
+            ["受けた質問", "応え方"],
+            ["なぜ causal attention の言語モデルなのか．\ncausal でなくてよく，むしろ結果を損ねたのでは",
+             ["使ったモデルの性質で，選んでいない", "causal でないモデルと比べていない", "答えが依存する層・位置は測る"]],
+            ["整合の制約が弱いのでは．λ を大きくするか，\n掛ける層を増やせば，何か変わるのでは",
+             ["λ を変えて学習する", "層は増やさず，一つずつ変えて試す"]],
+            ["入力ごとに LLM のどこが強く働くかは，\n多くの研究が調べている．それを参考にすれば，\n整合を掛けるべき場所が分かるのでは",
+             ["依存の大きい位置に整合を掛け直す"]],
+            ["𝒉 には Attention の Q の情報が強く出て，\nほかの情報は潰れているのでは．だから，\n𝒉 から読み取れる情報も限られるのでは（曖昧）",
+             ["𝒉 は Q そのものではなく，\n次の層が Q・K・V を作る元", "聞き取りが曖昧で，測らない"]],
         ],
-        center=(0,),
     )
-    s.text([("→ 1–3は，層・位置・強さを変えれば手順の情報が使われるかを問う", BODY, RED)])
+    return s
+
+
+def s_input() -> Slide:
+    """プロンプトの並び（研究文書 §8.5 第1歩）と，以降のスライドが名指す位置．
+
+    書式の文字列は，SmolVLM-500M-Instruct のプロセッサで組んだトークンの列と一字ずつ合わせてある（2026-11-27）．
+    """
+    s = Slide("言語モデル部への入力")
+    s.text([("causal attention のもとで，各位置が何を読むかを示す", BODY, INK)])
+    groups = [("書式", 3, False, "<|im_start|>User:"), ("画像", 5, True, "67トークン"),
+              ("質問文", 5, True, "What's the girl holding?"), ("書式", 5, False, "")]
+    sep = 0.45
+    span = sum((n + dots) * PITCH for _, n, dots, _ in groups) - (PITCH - TOKEN) + sep * (len(groups) - 1)
+    y = s.take(0.38 + 2 * line_h(DIAG) + 0.05 + 0.75 + 0.45)  # トークン，名の2行，括り線，広げた6位置
+    x, xs = X0 + (W - span) / 2, []
+    for k, (name, n, dots, note) in enumerate(groups):
+        row = tokens(s, x, y, n, last_h=k == len(groups) - 1, dots=dots)
+        mid, wide = (row[0] + row[-1] + TOKEN) / 2, row[-1] + TOKEN - row[0] + sep
+        s.label(mid - wide / 2 - 0.3, y + 0.38, wide + 0.6, name)
+        if note:
+            s.label(mid - wide / 2 - 0.4, y + 0.38 + line_h(DIAG), wide + 0.8, note, sz=SMALL)
+        xs += row
+        x = row[-1] + PITCH + sep
+    # 質問を読み終えた6位置（質問文の最後のトークンと，後ろの書式）を下に広げて見せる
+    # 括り線の中央から下ろし，広げた並びの中央へ折って入れる（線は水平と垂直だけ）
+    start, by = xs[-6], y + 0.38 + 2 * line_h(DIAG) + 0.05
+    s.line(start, by, xs[-1] + TOKEN, by, arrow=False)
+    s.label(start - 3.1, by + 0.04, 3.0, "質問を読み終えた6位置", algn="r")
+    left, right = ending_span()
+    down, turn = (start + xs[-1] + TOKEN) / 2, by + 0.4
+    s.line(down, by, down, turn, arrow=False)
+    s.line(down, turn, (left + right) / 2, turn, arrow=False)
+    s.line((left + right) / 2, turn, (left + right) / 2, by + 0.75)
+    ending_row(s, by + 0.75)
+    s.text([
+        ("causal attention なので，各位置は前のトークンだけを読む", BODY, INK, 1),
+        ("画像の位置は，質問文をまだ読んでいない", BODY, INK, 1),
+        ("今の 𝒉 は第16層の最後の位置で，ここに整合を掛けている", BODY, INK, 1),
+    ])
     return s
 
 
 def s_candidates() -> Slide:
     s = Slide("手順の情報が十分には使われない理由")
-    y = s.take(1.75 + 0.38 + line_h(DIAG))  # 位置の図の下端は，トークンの下の名の行
-    # 位置：手順の情報は 𝒉 に載るが，後段の層は他の位置を主に読む（𝒉 からの矢印を破線にする）
+    s.text([("答えを良くしないなら，手順の情報は後段の層にあまり読まれない", BODY, INK),
+            ("読まれにくい所は，次の二通りが考えられる", BODY, INK)])
+    y = s.take(line_h(DIAG) + 1.75 + 0.38 + line_h(DIAG))
+    # 位置：後段の層は 𝒉 より他の位置を主に読む（𝒉 からの矢印を破線にする）
     left = X0 + 0.2
-    s.box(left, y + 0.4, 5.0, 0.5, ["後段の層（第17–32層）"], sz=DIAG)
-    ty = y + 1.75
+    s.label(left, y, 5.4, "後段の層は，𝒉 より他の位置を主に読む", algn="l")
+    gy = y + line_h(DIAG)
+    s.box(left, gy + 0.4, 5.0, 0.5, ["後段の第17–32層"], sz=DIAG)
+    ty = gy + 1.75
     xs = tokens(s, left + 0.35, ty, 4) + tokens(s, left + 2.35, ty, 4) + tokens(s, left + 4.35, ty, 1, last_h=True)
     for xk in xs:
-        s.line(xk + TOKEN / 2, ty, xk + TOKEN / 2, y + 0.9, dash=xk == xs[-1])
+        s.line(xk + TOKEN / 2, ty, xk + TOKEN / 2, gy + 0.9, dash=xk == xs[-1])
     s.label(left + 0.35, ty + 0.38, 1.56, "画像")
     s.label(left + 2.35, ty + 0.38, 1.56, "質問文")
     s.label(left + 4.0, ty + 0.38, 1.0, "𝒉")
-    s.label(left, y, 5.0, "位置", algn="l")
     # 方向：手順の情報が，答えを動かさない方向に載る
-    axes(s, X0 + 6.0, y, "方向", [(0.6, 0.45, INK, "手順 A"), (2.9, 0.45, WHITE, "手順 B")])
-    s.text([
-        ("候補：答えを良くしないなら，手順の情報は後段にあまり読まれない", BODY, INK),
-        ("位置：手順の情報は 𝒉 に載るが，後段の層は他の位置を主に読む", BODY, INK),
-        ("方向：手順の情報が，𝒉 の中で答えを動かさない方向に載る", BODY, INK),
-    ])
-    s.text([("→ 掛ける位置と方向を順に変えて試す", BODY, RED)])
+    axes(s, X0 + 6.0, y, "手順の情報が，答えを動かさない方向に載る",
+         [(0.6, 0.45, INK, "手順 A"), (2.9, 0.45, WHITE, "手順 B")], h=line_h(DIAG) + 1.75)
+    s.text([("→ 整合を掛ける位置と方向を変えて試す", BODY, ACCENT)])
     return s
 
 
-def s_plan(done: tuple[bool, ...], trained: int) -> Slide:
-    """done は手順ごとに，結果が analyses/ にあるか．ある手順には「済」を，学習の途中の③には本数を添える．"""
-    s = Slide("方針と進み具合")
-    steps = [
-        "① 答えが依存する層と位置のマップを作る",
-        "② 整合の強さ λ を変える",
-        "③ 答えの依存が大きい位置に整合を掛け直す",
-        "④ 答えを動かす方向に限って整合を掛ける",
-    ]
-    steps = [f"{t}：済" if d else t for t, d in zip(steps, done, strict=True)]
-    if not done[2] and trained:
-        steps[2] += f"：{RELOCATED_RUNS}本中{trained}本を学習"
-    bh, ah = 0.55, 0.15  # 手順は計画の順に並べるだけで，矢印で結ばない（依存を見せない）
-    y = s.take(len(steps) * bh + (len(steps) - 1) * ah)
-    bw = max(text_width(typeset(t), BODY) for t in steps) / 0.94 + 0.5
-    bx = X0 + (W - bw) / 2  # 図と表は左右の中央に置く（principles.md §4）
-    for t in steps:
-        s.box(bx, y, bw, bh, [t], algn="l", sz=BODY, pad=0.2)
-        y += bh + ah
-    s.text([
-        ("並行して：学習にほとんど出ない署名でも，読み取り精度を測る", BODY, INK),
-        ("その後：別のモデルとデータ．署名に代えて yes/no 問か否かで整合", BODY, INK),
-    ])
-    return s
+def s_plan(done: tuple[bool, ...]) -> Slide:
+    """手順を計画の順に縦に並べ，右に状況を添える．矢印で結ばない（依存を見せない．principles.md §2）．
 
-
-def s_map() -> Slide:
-    s = Slide("① 層と位置ごとの相対感度のマップ")
-    cols = [("書式", 3), ("画像", 8), ("質問文", 6), ("書式", 5)]
-    rows = ["第32層", "第16層", "第1層"]  # 全32層を測る．間の層は縦の点で略す
-    n = sum(k for _, k in cols)
-    cw, rh, gap = 0.3, 0.42, 0.36
-    gw = n * cw
-    gx = X0 + (W - gw) / 2
-    y = s.take(len(rows) * rh + (len(rows) - 1) * gap + 0.08 + line_h(DIAG))
-    for r, name in enumerate(rows):
-        ry = y + r * (rh + gap)
-        s.label(gx - 1.15, ry + 0.06, 1.0, name, algn="r")
-        for k in range(n):
-            s.box(gx + k * cw, ry, cw, rh, fill=INK if r == 1 and k == n - 1 else None)
-        if r:
-            s.label(gx - 1.15, ry - gap + 0.02, 1.0, "⋮", algn="r")
-    s.label(gx + gw + 0.15, y + rh + gap + 0.06, 1.05, "今の 𝒉", algn="l")
-    x = gx
-    for name, k in cols:
-        s.label(x - 0.3, y + len(rows) * rh + (len(rows) - 1) * gap + 0.08, k * cw + 0.6, name)
-        x += k * cw
-    s.text([
-        ("ねらい：答えがどの層・位置に依存するかを，3群 × 乱数種3つで見る", BODY, INK),
-        ("書式：会話の枠の語．User: や Assistant: など", BODY, INK),
-        ("注意：マスの和は一定でない．依存が他の位置へ移ったかは言えない", BODY, INK),
-        ("ほかに：第8・24層に整合を掛けた試走2本でも測る", BODY, INK),
-    ])
-    return s
-
-
-def s_lambda() -> Slide:
-    s = Slide("② 整合の強さ λ の変更")
-    bw, bh = 1.8, 0.6
-    gap = (W - 5 * bw) / 4
-    y = s.take(bh + 0.15 + 2 * 0.3)
-    points = [("λ = 0", ["baseline", "測定済み"]), ("λ = 0.03", ["新たに学習"]), ("λ = 0.1", ["proposal", "測定済み"]),
-              ("λ = 0.3", ["新たに学習"]), ("λ = 1.0", ["新たに学習"])]
-    for k, (t, notes) in enumerate(points):
-        x = X0 + k * (bw + gap)
-        s.box(x, y, bw, bh, [t], sz=DIAG)
-        if k < len(points) - 1:
-            s.line(x + bw, y + bh / 2, x + bw + gap, y + bh / 2, arrow=False)
-        for j, note in enumerate(notes):
-            s.label(x, y + bh + 0.12 + j * 0.3, bw, note)
-    s.text([
-        ("ねらい：読み取り精度の利得に，正解率の代償が伴う λ を見る", BODY, INK),
-        ("測る：各強さで読み取り精度・正解率・相対感度．乱数種は1つ", BODY, INK),
-    ])
-    s.text([("判定：相対感度が λ に伴い単調に下がれば，今の低下は強さに応じる", BODY, RED)])
-    return s
-
-
-def s_relocate(choice: dict | None) -> Slide:
-    """choice は①が選んだ場所．選んであれば，選び方の次の行で，規則でなく選んだ結果を言う．"""
-    s = Slide("③ 依存の大きい位置への掛け直し")
-    groups = [("書式", 3), ("画像", 5), ("質問文", 4), ("書式", 5)]
-    sep = 0.3  # 区分どうしの間に足す空き
-    span = sum(n for _, n in groups) * PITCH - (PITCH - TOKEN) + (len(groups) - 1) * sep
-    y = s.take(0.8 + 0.08 + line_h(DIAG))
-    x, xs = X0 + (W - span) / 2, []
-    for k, (name, n) in enumerate(groups):
-        row = tokens(s, x, y, n, last_h=k == len(groups) - 1)
-        s.label(row[0] - 0.3, y + 0.4, row[-1] + TOKEN - row[0] + 0.6, name)
-        xs += row
-        x = row[-1] + PITCH + sep
-    s.label(xs[-1] + TOKEN + 0.1, y - 0.01, 1.1, "今の 𝒉", algn="l")
-    cand = xs[-6:]
-    by = y + 0.8
-    s.line(xs[0], by, xs[7] + TOKEN, by, arrow=False)
-    s.label(xs[0] - 0.3, by + 0.08, xs[7] + TOKEN - xs[0] + 0.6, "質問を見ない70位置")
-    s.line(cand[0], by, cand[-1] + TOKEN, by, arrow=False)
-    s.label(cand[0] - 0.7, by + 0.08, cand[-1] + TOKEN - cand[0] + 1.4, "選ぶ先：質問を読み終えた6位置")
-    lines = [
-        "選び方：第16層の6位置のうち，baseline の相対感度が最大の位置",
-        (f"掛ける先：最大は{place(choice['largest'])}で今と同じなので，{chosen(choice)}" if choice
-         else "最大が今の 𝒉 なら，同じ一点なので6位置すべてに掛ける"),
-        f"学習：proposal・ablation × 乱数種3つの{RELOCATED_RUNS}本",
-        "測る：相対感度と正解率を，baseline・ablation と比べる",
-    ]
-    s.text([(t, BODY, INK) for t in lines])
-    s.text([
-        ("判定：相対感度が両方を下回れば，十分には使われない", BODY, RED),
-        ("相対感度が保たれ，正解率が両方を超えれば，問いに肯定の材料", BODY, INK),
-    ])
-    return s
-
-
-def s_direction() -> Slide:
-    s = Slide("④ 答えを動かす方向に限った整合")
-    y = s.take(1.75 + 0.06 + line_h(DIAG))  # 軸の図の下端は，横軸の名の行
-    axes(s, X0 + 0.1, y, "今の整合：動かさない方向で分かれうる",
-         [(0.6, 0.4, INK, "手順 A"), (2.9, 0.4, WHITE, "手順 B")], h=1.75)
-    axes(s, X0 + 6.0, y, "④：答えを動かす方向で分ける",
-         [(2.9, 0.95, INK, "手順 A"), (2.9, 0.4, WHITE, "手順 B")], h=1.75)
-    s.text([
-        ("方向：第16層で答えを動かす方向．baseline で求め，学習中は固定", BODY, INK),
-        ("測る：相対感度と正解率を，baseline・ablation と比べる", BODY, INK),
-    ])
-    s.text([
-        ("判定：相対感度が両方を下回れば，十分には使われない", BODY, RED),
-        ("相対感度が保たれれば，方向の候補と両立する", BODY, INK),
-    ])
+    状況は，結果が analyses/ にあれば「今回報告」，無ければ「未着手」．走っているかは git から読めないので，
+    「学習中」とは書かない（principles.md §2 の状況の項）．
+    """
+    s = Slide("実験の計画")
+    s.text([("質問と，十分には使われない理由をもとに，次の順で実験する", BODY, INK)])
+    sw = max(text_width(typeset(t), BODY) for t in STEPS) / 0.94 + 0.2 + 0.6
+    y = s.text([(t, BODY, INK) for t in STEPS], w=sw)
+    s.text([("今回報告" if d else "未着手", BODY, INK) for d in done], x=X0 + sw, w=2.0, y=y)
+    reported = "・".join(t[0] for t, d in zip(STEPS, done, strict=True) if d)
+    if reported:
+        s.text([(f"→ 今回は{reported}の結果を報告", BODY, ACCENT)])
     return s
 
 
@@ -518,7 +549,9 @@ def s_direction() -> Slide:
 #
 # 結果のスライドは，analyses/ にその結果があるときだけ作る．値は analyses/ から取り，表示の桁で丸める．
 # 読みの文の選び方は冒頭の docstring にある．読みを返す関数（*_reading と RELOCATION）は文だけを返し，
-# 結論の印の「→ 」はスライドの側で付ける——まとめのスライドは同じ文を印なしで並べ直す．
+# 結論の印の「→ 」はスライドの側で付ける——まとめのスライドは同じ文を印なしで並べ直す．二行の読みは
+# 一行目だけを並べ，マップの読みは二行とも並べる．λ の読みは，一行目だけでは二行目の「単調には下がらない」が
+# 落ちる場合があるので，まとめの一行を別に返す．
 
 
 def load(name: str) -> dict | None:
@@ -543,17 +576,6 @@ def _study_statistics():
 paired_difference = _study_statistics().paired_difference
 
 
-def trained_relocated() -> int:
-    """③で学習し終えた run の数．終えた run は snapshots/ に評価を残す．
-
-    git の索引から数える：ノートPCの作業ツリーは snapshots/ を持たず（sparse checkout），研究室機の
-    ジョブは記録の前に済んだ run を索引に載せるので，どちらの機でも同じ数になる．
-    """
-    listed = subprocess.run(["git", "ls-files", "snapshots"], cwd=ROOT, capture_output=True,
-                            text=True, check=True).stdout.splitlines()
-    return sum(bool(re.fullmatch(r"snapshots/[^/]*_relocated_[^/]*/metrics/eval\.json", p)) for p in listed)
-
-
 def num(v: float, digits: int, *, signed: bool = False) -> str:
     """表示の桁で丸めた値．負号は U+2212（principles.md §3）．"""
     return f"{v:{'+' if signed else ''}.{digits}f}".replace("-", "−")
@@ -566,26 +588,30 @@ def interval(d: dict, digits: int) -> str:
 
 
 def png(rows: list[list[float]], cell: int = 8) -> bytes:
-    """0–1 の値の格子を，値が大きいほど濃い灰色の PNG にする．一マスは cell 画素の正方形．"""
+    """0–1 の値の格子を，0 が白，0.5 が MID，1 が DEEP の緑になる PNG にする．一マスは cell 画素の正方形．"""
+    def rgb(v: float) -> bytes:
+        low, high, k = (WHITE, MID, 2 * v) if v < 0.5 else (MID, DEEP, 2 * v - 1)
+        return bytes(round(a + (b - a) * k) for a, b in zip(bytes.fromhex(low), bytes.fromhex(high), strict=True))
+
     raw = b"".join(
-        b"\x00" + bytes(g for v in row for g in [round(255 * (1 - v))] * cell)
+        b"\x00" + b"".join(rgb(v) * cell for v in row)
         for row in rows for _ in range(cell)
     )
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
-    header = struct.pack(">IIBBBBB", len(rows[0]) * cell, len(rows) * cell, 8, 0, 0, 0, 0)
+    header = struct.pack(">IIBBBBB", len(rows[0]) * cell, len(rows) * cell, 8, 2, 0, 0, 0)
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
             + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
-# 質問を読み終えた6位置の名．プロンプトの末尾から数えた位置で引く（研究文書 §8.5 の並び）．
-ENDING = {-6: "質問文の末尾", -5: "<end_of_utterance>", -4: "改行", -3: "Ass", -2: "istant", -1: ":（今の 𝒉）"}
 LEAD = 3  # プロンプトの先頭で，画像の前に来る書式の語の数
 ARMS = ("baseline", "proposal", "ablation")
 # 本筋で見せる群の比較（principles.md §2）
 PAIRS = (("proposal", "baseline"), ("proposal", "ablation"))
+TRIAL = "42"  # 掛ける層を変えた試走の乱数種（研究文書 §A.5）
+PROPOSAL_WEIGHT = 0.1  # proposal の整合の強さ λ（研究文書 §3.2）
 
 
 def seed_mean(runs: dict, cells: Callable[[dict], list[list[float]]]) -> list[list[float]]:
@@ -595,7 +621,7 @@ def seed_mean(runs: dict, cells: Callable[[dict], list[list[float]]]) -> list[li
 
 
 def place(offset: int) -> str:
-    """文の中で位置を指す名．表の見出しでは ENDING のトークンの名を使う．"""
+    """文と表で位置を指す名．最後の位置だけは，トークンの文字でなく今の 𝒉 と呼ぶ．"""
     return "今の 𝒉" if offset == -1 else ENDING[offset]
 
 
@@ -604,6 +630,9 @@ def chosen(choice: dict) -> str:
     if len(choice["positions"]) > 1:
         return f"第{choice['layer']}層の6位置すべて"
     return f"第{choice['layer']}層の「{place(choice['positions'][0])}」"
+
+
+# ---------------------------------------------------------------- ① の結果
 
 
 def baseline_map(mapped: dict) -> tuple[list[list[float]], list[list[float]], list[list[float]]]:
@@ -620,18 +649,25 @@ def baseline_map(mapped: dict) -> tuple[list[list[float]], list[list[float]], li
     return head, question, ending
 
 
+def seeds(mapped: dict) -> int:
+    """①の各群の乱数種の数．"""
+    return len(mapped["sets"]["reported"]["baseline"])
+
+
 def s_map_result(mapped: dict) -> Slide:
     s = Slide("① の結果：baseline のマップ")
     head, question, ending = baseline_map(mapped)
     grid = [h + q + e[1:] for h, q, e in zip(head, question, ending, strict=True)]
     # 濃さの上限は，第1–31層の，先頭の位置を除いた値から取る：最後の層は定義から末尾だけが 1 になり，
-    # 先頭の書式の語は値が特に大きい（左端の黒）．濃さは平方根に比例させ，小さい値も見えるようにする
+    # 先頭の書式の語は値が特に大きい（左端の濃い列）．濃さは平方根に比例させ，小さい値も見えるようにする
     top = max(v for row in grid[:-1] for v in row[1:])
     shade = [[min(v / top, 1.0) ** 0.5 for v in row] for row in reversed(grid)]
 
+    s.text([("掛ける場所を選ぶため，baseline の相対感度を全層・全位置で見る", BODY, INK),
+            (f"濃いほど大きい．乱数種{seeds(mapped)}つの平均", BODY, INK)])
     cols = [("書式", LEAD), ("画像", len(head[0]) - LEAD), ("質問文", len(question[0])), ("書式", len(ending[0]) - 1)]
     n, layers = len(shade[0]), len(shade)
-    cw, rh = 9.3 / n, 0.085
+    cw, rh = 9.3 / n, 0.045
     gx = X0 + (W - n * cw) / 2
     # 層の名は行の中心に置くので，最上段の名が本文の始まりより上に出ない分だけ図を下げる
     lift = line_h(DIAG) / 2 - rh / 2
@@ -646,44 +682,24 @@ def s_map_result(mapped: dict) -> Slide:
         s.line(x + 0.03, by, x + k * cw - 0.03, by, arrow=False)
         s.label(x - 0.3, by + 0.04, k * cw + 0.6, name)
         x += k * cw
-    s.text([
-        ("濃いほど相対感度が大．質問文は問の半数が届く位置まで", BODY, INK),
-        ("左端の黒：先頭の書式の語．値が特に大きい．理由は未調査", BODY, INK),
-    ])
-    s.text([(f"→ {map_reading(mapped)}", BODY, RED)])
+    first, second = map_reading(mapped)
+    s.text([("左端の濃い列は先頭の <|im_start|> で，理由は未調査", BODY, INK),
+            (f"→ {first}", BODY, ACCENT), (second, BODY, ACCENT)])
     return s
 
 
-def map_reading(mapped: dict) -> str:
+def map_reading(mapped: dict) -> tuple[str, str]:
     """baseline のマップの記述（研究文書 §8.5 第1歩の結果）．整合を掛けた層で，画像のどの位置より
     質問文（問の半数が届く位置まで）と今の 𝒉 が大きいことを確かめてから言う．
+    二行で返し，マップのスライドとまとめが同じ二行を使う．「画像までしか読んでいない位置」は先頭の書式
+    （<|im_start|> は値が特に大きい）も含むので，比べる相手は画像のトークンの位置と書く．
     """
     layer = mapped["site_layer"]
     head, question, ending = (grid[layer - 1] for grid in baseline_map(mapped))
     if not max(head[LEAD:]) < min(question) <= max(question) < ending[-1]:
         raise SystemExit("マップの記述が値に合わない：研究文書 §8.5 第1歩の結果を読み直し，この文を書き直す")
-    return f"第{layer}層では，画像より質問文と今の 𝒉 の相対感度が大きい"
-
-
-def s_site_result(mapped: dict) -> Slide:
-    choice, dim, layer = mapped["choice"], str(mapped["primary_dim"]), mapped["site_layer"]
-    s = Slide(f"① の結果：第{layer}層の6位置")
-    s.text([
-        ("6位置：質問を読み終えた位置．質問文の末尾と後ろの書式", BODY, INK),
-        ("Assistant: は Ass・istant・: の3トークンに分かれる", BODY, INK),
-    ])
-    rows = [["群", *(ENDING[o] for o in choice["offsets"])]]
-    for arm in ARMS:
-        row = seed_mean(mapped["sets"]["reported"][arm], lambda run: run["ending"][dim])[layer - 1]
-        rows.append([arm, *(num(v, 3) for v in row)])
-    s.table([1.5, 1.8, 2.8, 0.9, 0.9, 1.1, 1.9], rows, center=tuple(range(1, 7)),
-            bold=((1, 1 + choice["offsets"].index(choice["largest"])),))
-    s.text([
-        ("値：相対感度（方向32本）．乱数種3つの平均", BODY, INK),
-        ("太字：baseline の最大", BODY, INK),
-    ])
-    s.text([(f"→ baseline の相対感度は，{place(choice['largest'])}で最大", BODY, RED)])
-    return s
+    return (f"第{layer}層の baseline では，質問文の位置と今の 𝒉 のほうが，",
+            "画像のトークンの位置より相対感度が大きい")
 
 
 def site_differences(mapped: dict) -> list[list[dict]]:
@@ -698,71 +714,89 @@ def site_differences(mapped: dict) -> list[list[dict]]:
 
 def site_reading(mapped: dict) -> str:
     """6位置での proposal の動き．両方の比較で区間が 0 を含まない位置だけを，向きごとに名指す．"""
-    offsets, moved = mapped["choice"]["offsets"], {"低下": [], "上昇": []}
+    offsets, moved = mapped["choice"]["offsets"], {"低く": [], "高く": []}
     for offset, pair in zip(offsets, site_differences(mapped), strict=True):
         if all(d["excludes_zero"] for d in pair) and len({d["mean"] > 0 for d in pair}) == 1:
-            moved["上昇" if pair[0]["mean"] > 0 else "低下"].append(place(offset))
+            moved["高く" if pair[0]["mean"] > 0 else "低く"].append(place(offset))
     said = "，".join(f"{'・'.join(where)}で{way}" for way, where in moved.items() if where)
-    return f"proposal は{said}" if said else "proposal が両方と違う位置は無い"
+    # 連用形でつないだ最後の「く」を「い」に替えて，文を閉じる
+    return f"proposal は両群より，{said[:-1]}い" if said else "proposal が両群と違う位置は無い"
 
 
-def s_site_differences(mapped: dict) -> Slide:
-    s = Slide(f"① の結果：第{mapped['site_layer']}層の6位置での差")
-    rows = [["位置", *(f"{a} − {b}" for a, b in PAIRS)]]
-    bold = []
-    for r, (offset, pair) in enumerate(zip(mapped["choice"]["offsets"], site_differences(mapped), strict=True), 1):
-        rows.append([ENDING[offset], *(interval(d, 3) for d in pair)])
-        bold += [(r, c) for c, d in enumerate(pair, 1) if d["excludes_zero"]]
-    s.table([3.0, 3.8, 3.8], rows, center=(1, 2), bold=tuple(bold))
-    s.text([
-        ("値：相対感度の差と95%信頼区間．太字は区間が 0 を含まない差", BODY, INK),
-        ("注意：位置どうしの和は一定でなく，依存が移ったとは言えない", BODY, INK),
-    ])
-    s.text([(f"→ {site_reading(mapped)}", BODY, RED)])
+def s_sites(mapped: dict) -> Slide:
+    """第16層の6位置（④の候補．研究文書 §8.5 第2歩が測る前に決めた）での baseline の値と，群の差．
+
+    baseline の列が④の場所を決め（最大の位置），差の列が群の比較を見せる．
+    """
+    s = Slide(f"① の結果：第{mapped['site_layer']}層の6位置")
+    s.text([("質問を読み終えた6位置は，測る前に決めた④の候補", BODY, INK)])
+    diffs = site_differences(mapped)
+    rows = [["位置", "baseline", *(f"{a} − {b}" for a, b in PAIRS)]]
+    for offset, value, pair in zip(mapped["choice"]["offsets"], mapped["choice"]["baseline"], diffs, strict=True):
+        rows.append([place(offset), num(value, 3), *(interval(d, 3) for d in pair)])
+    s.table([2.8, 1.4, 3.65, 3.65], rows, center=(1, 2, 3), bold=tuple(
+        (r, c) for r, pair in enumerate(diffs, start=1) for c, d in enumerate(pair, start=2) if d["excludes_zero"]))
+    s.text([(f"値は相対感度，乱数種{seeds(mapped)}つの平均．太字は区間が 0 を含まない差", BODY, INK)])
+    s.text([(f"→ {site_reading(mapped)}", BODY, ACCENT)])
     return s
 
 
-def layer_tails(mapped: dict, seed: str = "42") -> list[tuple[int, float, float]]:
-    """整合を掛けた層ごとの（層，baseline の末尾，proposal の末尾）．どれも同じ乱数種で，層の順．"""
+def layer_tails(mapped: dict) -> list[tuple[int, float, float]]:
+    """整合を掛けた層ごとの（層，baseline の末尾，proposal の末尾）．どれも乱数種 TRIAL で，層の順．"""
     dim, sets = str(mapped["primary_dim"]), mapped["sets"]
 
     def tail(run: dict, layer: int) -> float:
         return run["ending"][dim][layer - 1][-1]
 
-    return [(layer, tail(sets["reported"]["baseline"][seed], layer), tail(runs[seed], layer))
+    return [(layer, tail(sets["reported"]["baseline"][TRIAL], layer), tail(runs[TRIAL], layer))
             for layer, runs in sorted([(mapped["site_layer"], sets["reported"]["proposal"]),
-                                       *((r[seed]["layer"], r) for r in sets["layer"].values())])]
+                                       *((r[TRIAL]["layer"], r) for r in sets["layer"].values())])]
 
 
-def layer_reading(mapped: dict) -> str:
-    """掛けた層の末尾の向き（研究文書 §8.5 第1歩）．どの層でも下がるときだけ「層によらない」と言う．"""
+def layer_reading(mapped: dict) -> tuple[str, str]:
+    """掛けた層の末尾の向き（研究文書 §8.5 第1歩）．どの層でも下がるときだけ「層によらない」と言う．二行で返す．"""
     tails = layer_tails(mapped)
-    fell = [f"第{layer}層" for layer, before, after in tails if after < before]
-    rose = [f"第{layer}層" for layer, before, after in tails if after >= before]
+    fell = "・".join(str(layer) for layer, before, after in tails if after < before)
+    rose = "・".join(str(layer) for layer, before, after in tails if after >= before)
     if not rose:
-        return "どの層でも低下．依存の低下は層によらない見込み"
-    if fell == [f"第{mapped['site_layer']}層"]:
-        return f"低下は第{mapped['site_layer']}層だけ．第{mapped['site_layer']}層に固有の見込み"
-    return f"{'・'.join(fell)}で低下，{'・'.join(rose)}で上昇．層によらないとは言えない"
+        return "相対感度はどの層でも低下", "依存の低下は層によらない見込み"
+    if fell == str(mapped["site_layer"]):
+        return f"相対感度の低下は第{fell}層だけ", f"依存の低下は第{fell}層に固有の見込み"
+    return f"相対感度は第{fell}層で低下，第{rose}層で上昇", "依存の低下は，層によらないとは言えない"
 
 
-def s_layers_result(mapped: dict) -> Slide:
-    s = Slide("① の結果：整合を掛ける層の変更")
-    rows = [["整合を掛けた層", "baseline", "proposal", "変化"]]
-    for layer, before, after in layer_tails(mapped):
-        rows.append([f"第{layer}層", num(before, 3), num(after, 3), num(100 * (after / before - 1), 1, signed=True) + "%"])
-    s.table([2.6, 2.0, 2.0, 2.0], rows, center=(0, 1, 2, 3))
-    s.text([
-        ("値：掛けた層の，プロンプトの最後の位置の相対感度", BODY, INK),
-        ("変化：(proposal − baseline) ÷ baseline", BODY, INK),
-        ("乱数種42の1本．区間は作れず，向きだけを読む", BODY, INK),
-    ])
-    s.text([(f"→ {layer_reading(mapped)}", BODY, RED)])
+def s_layers(mapped: dict, sweep: dict) -> Slide:
+    """掛ける層を変えた試走（研究文書 §A.5）と，第16層に掛けた同じ乱数種の proposal．
+
+    表の行はどれも proposal で，読み取り精度と正解率は summarize-sweep.json の points から，相対感度は掛けた層の
+    末尾の値を取る．baseline は行に置かず，正解率は冒頭の行で，相対感度は差の列で比べる（principles.md §2 の
+    表の項）．読み取り精度は，baseline では第16層でしか測っていないので比べない．
+    """
+    s = Slide("① の結果：掛ける層を変えた試走")
+    points = {p["layer"]: p for p in sweep["points"] if p["arm"] == "proposal" and p["align_weight"] == PROPOSAL_WEIGHT}
+    base = next(p for p in sweep["points"] if p["arm"] == "baseline")
+    tails = layer_tails(mapped)
+    trials = "・".join(str(layer) for layer, _, _ in tails if layer != mapped["site_layer"])
+    s.text([(f"学会の結果が掛ける層によるかを，第{trials}層に掛けた試走で見る", BODY, INK),
+            (f"表は proposal．乱数種はどれも{TRIAL}で，baseline の正解率は{num(base['accuracy']['per_seed'][TRIAL], 2)}%",
+             BODY, INK)])
+    rows = [["掛けた層", "読み取り精度（%）", "正解率（%）", "相対感度", "相対感度の差\nproposal − baseline"]]
+    for layer, before, after in tails:
+        point = points[layer]
+        rows.append([f"第{layer}層", num(100 * point["probe_accuracy"]["per_seed"][TRIAL], 1),
+                     num(point["accuracy"]["per_seed"][TRIAL], 2), num(after, 3), num(after - before, 3, signed=True)])
+    s.table([1.4, 2.5, 1.7, 2.0, 3.0], rows, center=(0, 1, 2, 3, 4))
+    s.text([(f"加工による 𝒉 の動きの比は，第{trials}層では未測定", BODY, INK)])
+    first, second = layer_reading(mapped)
+    s.text([(f"→ {first}", BODY, ACCENT), (second, BODY, ACCENT)])
     return s
 
 
+# ---------------------------------------------------------------- ② の結果
+
+
 def weight(w: float) -> str:
-    """λ の表記．②の計画のスライドと同じく 0 と 1.0 と書く．"""
+    """λ の表記．0 と 1.0 と書く．"""
     return "0" if w == 0 else str(w)
 
 
@@ -776,43 +810,92 @@ def lambda_cost(curve: dict) -> float:
     return math.ceil(round(largest, 2) * 10) / 10
 
 
-def lambda_below(curve: dict, dim: str) -> bool:
-    """λ > 0 のどの点でも，相対感度が λ = 0 より低いか（研究文書 §8.4 の結果の記述）．"""
+def lambda_reading(curve: dict, dim: str) -> tuple[str, str, str]:
+    """研究文書 §8.4 の結果の記述と，測る前に決めた判定（相対感度がどの段でも下がるか）．
+
+    スライドの二行と，まとめの一行を返す．下がったと言うときは，何より下がったか（baseline）を書く．
+    """
+    if curve["sensitivity_falls_at_every_step"]:
+        falls = "相対感度は λ に伴って単調に下がる"
+        return falls, "学会で示した依存の低下は，強さに応じる", falls
     leaning, zero = curve["sensitivity"][dim], curve["align_weight"].index(0.0)
-    return all(v < leaning[zero] for k, v in enumerate(leaning) if k != zero)
+    if all(v < leaning[zero] for k, v in enumerate(leaning) if k != zero):
+        return ("相対感度は，λ > 0 のどれでも baseline より低い",
+                "ただし単調には下がらず，依存の低下が強さに応じるとは言えない",
+                "相対感度は λ > 0 のどれでも baseline より低いが，単調には下がらない")
+    unsteady = "相対感度は λ に伴って単調には下がらない"
+    return unsteady, "学会で示した依存の低下が，強さに応じるとは言えない", unsteady
 
 
-def lambda_shape(curve: dict, dim: str) -> str:
-    """まとめの一行：λ > 0 の点が λ = 0 より低いかと，単調か．"""
-    monotone = curve["sensitivity_falls_at_every_step"]
-    if lambda_below(curve, dim) and not monotone:
-        return "相対感度は λ > 0 のどの点も λ = 0 より低いが，単調でない"
-    return "相対感度は λ に伴い単調に低下" if monotone else "相対感度は λ = 0 より高い点がある"
-
-
-def lambda_reading(curve: dict) -> str:
-    """研究文書 §8.4 が測る前に決めた判定：相対感度がどの段でも下がるか．"""
-    return ("相対感度は λ に伴い単調に低下．今の低下は強さに応じる"
-            if curve["sensitivity_falls_at_every_step"]
-            else "相対感度は単調に下がらず，今の低下は強さに応じるとは言えない")
+def cost_reading(curve: dict) -> str:
+    """正解率の動いた幅の読み．②の結果のスライドとまとめが同じ文を使う．"""
+    return f"正解率は baseline から{num(lambda_cost(curve), 1)}pt以内"
 
 
 def s_lambda_result(curve: dict, dim: str, spread: float) -> Slide:
-    """spread は baseline を乱数種だけ替えたときの正解率の幅（pt．研究文書 §5.2）．"""
+    """spread は baseline を乱数種だけ替えたときの正解率の幅（pt．研究文書 §5.2）．
+
+    群を左の列に置き，同じ群の行（λ > 0 はどれも proposal）を一つのセルに結合し，λ の列には値だけを置く
+    （principles.md §3 の表の項）．
+    """
     s = Slide("② の結果：整合の強さ λ の変更")
+    s.text([(f"依存の低下が強さに応じるかを，λ を変えて見る．乱数種{curve['seed']}の1本", BODY, INK)])
     leaning = curve.get("sensitivity", {}).get(dim)
-    rows = [["λ", "読み取り精度（%）", "正解率（%）", *(["相対感度"] if leaning else [])]]
+    rows: list[list[str | None]] = [["群", "λ", "読み取り精度（%）", "正解率（%）", *(["相対感度"] if leaning else [])]]
+    before = None  # 前の行の群．同じなら None を置いて，上のセルに結合する
     for k, w in enumerate(curve["align_weight"]):
-        rows.append([weight(w), num(100 * curve["probe_accuracy"][k], 1), num(curve["accuracy"][k], 2),
+        arm = "proposal" if w else "baseline"
+        rows.append([None if arm == before else arm, weight(w),
+                     num(100 * curve["probe_accuracy"][k], 1), num(curve["accuracy"][k], 2),
                      *([num(leaning[k], 3)] if leaning else [])])
-    s.table([1.6] + [2.6] * (len(rows[0]) - 1), rows, center=tuple(range(len(rows[0]))))
-    s.text([
-        ("乱数種42の1本．区間は作れず，向きと形を読む", BODY, INK),
-        (f"正解率：λ = 0 との差は{num(lambda_cost(curve), 1)}pt以内．乱数種だけでも{num(spread, 2)}pt動く", BODY, INK),
-        *([("相対感度：λ > 0 のどの点も λ = 0 より低い", BODY, INK)] if leaning and lambda_below(curve, dim) else []),
-    ])
+        before = arm
+    s.table([1.8, 1.4, 2.6, 2.2, 2.0][:len(rows[0])], rows, center=tuple(range(len(rows[0]))))
+    s.text([(f"{cost_reading(curve)}．乱数種だけで{num(spread, 2)}pt動く", BODY, INK)])
     if leaning:
-        s.text([(f"→ {lambda_reading(curve)}", BODY, RED)])
+        first, second, _ = lambda_reading(curve, dim)
+        s.text([(f"→ {first}", BODY, ACCENT), (second, BODY, ACCENT)])
+    return s
+
+
+# ---------------------------------------------------------------- 今後と ④ の結果
+
+
+AIMS = {2: "結果が層によらないか", 3: "使われるようになるか", 4: "使われるようになるか"}
+
+
+def s_future(done: tuple[bool, ...], choice: dict | None) -> Slide:
+    """結果の無い手順を一枚に集め，方法だけを言う（principles.md §2：まだ結果の無い実験は「今後」と添えて方法だけ）．
+
+    冒頭の行は，各手順が整合の何を変えるか（③は層，④は位置，⑤は方向）．
+    """
+    if choice is None:
+        site = "第16層の6位置のうち，baseline の最大の位置に掛ける"
+    elif len(choice["positions"]) > 1:
+        site = f"baseline の最大が{place(choice['largest'])}と同じなので，6位置すべてに掛ける"
+    else:
+        site = f"baseline の最大だった{place(choice['largest'])}に掛ける"
+    plans = {
+        2: ("層", ["baseline と，第8・16・24層に掛けた proposal を学習",
+                        "正解率・読み取り精度・相対感度と，加工による 𝒉 の動きの比を比べる"]),
+        3: ("位置", [site, "proposal と ablation を乱数種3つずつ学習し，baseline と比べる"]),
+        4: ("方向", ["答えを動かす方向へ射影した表現で，整合損失を計算する"]),
+    }
+    left = [k for k in plans if not done[k]]
+    marks = [STEPS[k][0] for k in left]
+    # 続く番号は範囲で，飛ぶ番号は並べて言う（「③–⑤」が④を含むと読まれないように）
+    contiguous = left == list(range(left[0], left[-1] + 1))
+    span = f"{marks[0]}–{marks[-1]}" if len(left) > 1 and contiguous else "・".join(marks)
+    s = Slide(f"今後：{span} の方法")
+    # 冒頭の行は，ねらいの同じ手順をまとめて言う（③は学会の結果が層によらないか，④⑤は使われるようになるか）
+    aims: dict[str, list[str]] = {}
+    for k in left:
+        aims.setdefault(AIMS[k], []).append(STEPS[k][0])
+    s.text([("，".join(f"{'・'.join(m)} で{aim}" for aim, m in aims.items()) + "を見る", BODY, INK)])
+    lines = []
+    for k in left:
+        lines.append((STEPS[k], BODY, INK))
+        lines += [(t, SUB, INK, 2) for t in plans[k][1]]
+    s.text(lines)
     return s
 
 
@@ -827,11 +910,11 @@ RELOCATION = {
 
 
 def s_relocate_result(relocation: dict) -> Slide:
-    s = Slide("③ の結果：整合を掛ける位置の変更")
+    s = Slide("④ の結果：掛ける位置の変更")
     pairs = tuple(f"{a}_minus_{b}" for a, b in PAIRS)  # summarize_relocation.py の鍵
     leaning = relocation["sensitivity"][str(relocation["primary_dim"])]
     accuracy = relocation["accuracy"]
-    s.text([(f"整合を掛けた場所：{chosen(relocation)}", BODY, INK)])
+    s.text([(f"{chosen(relocation)}に掛けた．乱数種3つ", BODY, INK)])
     s.table([2.6, 2.4, 2.4, 2.4], [
         ["乱数種3つの平均", *ARMS],
         ["相対感度", *(num(leaning[arm]["mean"], 3) for arm in ARMS)],
@@ -846,61 +929,73 @@ def s_relocate_result(relocation: dict) -> Slide:
         for c, pair in enumerate(pairs, start=1) if read[pair]["excludes_zero"]
     ))
     s.text([
-        ("太字：区間が 0 を含まない差", BODY, INK),
-        (f"→ {RELOCATION[relocation['outcome']]}", BODY, RED),
+        ("太字は区間が 0 を含まない差", BODY, INK),
+        (f"→ {RELOCATION[relocation['outcome']]}", BODY, ACCENT),
     ])
     return s
 
 
-def s_summary(mapped: dict | None, curve: dict | None, relocation: dict | None, trained: int) -> Slide:
-    """結果のスライドの読みを，同じ関数から一行ずつ集め直し，次の一手を添える．"""
+# ---------------------------------------------------------------- まとめ
+
+
+def s_summary(mapped: dict | None, curve: dict | None, dim: str, relocation: dict | None,
+              done: tuple[bool, ...]) -> Slide:
+    """結果のスライドの読みを，同じ関数から集め直し，次の一手を添える．
+
+    手順ごとに名を親の行に置き，読みをその下の箇条に並べる．乱数種1つの但し書きは，②では親の行に一度だけ，
+    ①の層の試走では「試走」の語で言う（principles.md §3 の但し書きの項）．
+    dim は相対感度を読む幅で，②の結果のスライドと同じものを受け取る．
+    次の一手は，研究文書 §8 の順で最初の未着手の手順．⑤は④が表の1行目に当たったときにだけ行う（§8.5 第3歩）．
+    """
     s = Slide("まとめと次の一手")
-    dim = str(mapped["primary_dim"]) if mapped else ""
     lines = []
     if mapped:
-        lines += [f"①：{t}" for t in (map_reading(mapped), site_reading(mapped))]
+        lines.append((STEPS[0], BODY, INK))
+        lines += [("\n".join(map_reading(mapped)), SUB, INK, 2), (site_reading(mapped), SUB, INK, 2)]
         if "layer" in mapped["sets"]:
-            lines.append(f"①：掛けた層では{layer_reading(mapped).split('．')[0]}（乱数種1つ）")
+            lines.append((f"掛ける層を変えた試走では，{layer_reading(mapped)[0]}", SUB, INK, 2))
     if curve:
-        lines.append(f"②：乱数種1つ．λ = 1.0 まで正解率の差は{num(lambda_cost(curve), 1)}pt以内")
-        lines.append(f"②：{lambda_shape(curve, dim)}" if dim in curve.get("sensitivity", {})
-                     else "②：相対感度は測っていない")
+        lines.append((f"{STEPS[1]}．乱数種はどれも1つ", BODY, INK))
+        lines.append((cost_reading(curve), SUB, INK, 2))
+        if curve.get("sensitivity", {}).get(dim):
+            lines.append((lambda_reading(curve, dim)[2], SUB, INK, 2))
     if relocation:
-        lines.append(f"③：{RELOCATION[relocation['outcome']]}")
-    s.text([(t, BODY, INK) for t in lines])
-    if relocation:
-        nxt = "→ 次：④の実装と学習" if relocation["outcome"] == "falls_by_labels" else "→ 次：④は行わず，次の問いへ"
-    else:
-        nxt = f"→ 次：③の残り{RELOCATED_RUNS - trained}本を学習し，相対感度と正解率で判定"
-    s.text([(nxt, BODY, RED)])
+        lines += [(STEPS[3], BODY, INK), (RELOCATION[relocation["outcome"]], SUB, INK, 2)]
+    s.text(lines)
+    left = [k for k, d in enumerate(done) if not d]
+    if relocation and relocation["outcome"] != "falls_by_labels":
+        left.remove(4)
+    s.text([(f"→ 次は，{STEPS[left[0]]}" if left else "→ 次は，次の問いへ進む", BODY, ACCENT)])
     return s
 
 
 def slides() -> list[Slide]:
-    """方針のスライドに，結果のあるものだけ結果のスライドを続け，最後にまとめる．"""
+    """前置きと計画の後に，結果のある実験は結果を，結果の無い実験は「今後」の一枚に方法を続け，最後にまとめる．
+
+    ③（層を変えた学習に乱数種を揃える）を読む分析はまだ無いので，③は常に未着手として扱う．
+    """
     mapped = load("probe-dependence-map.json")
     sweep = load("summarize-sweep.json")
     relocation = load("summarize-relocation.json")
     measured = mapped is not None and "reported" in mapped["sets"]
     curve = (sweep or {}).get("strength_curve")
-    trained = trained_relocated()
+    dim = str(mapped["primary_dim"]) if mapped else ""
+    done = (measured, bool(curve), False, bool(relocation), False)
 
-    deck = [s_done(measured, bool(curve), trained), s_questions(), s_candidates(),
-            s_plan((measured, bool(curve), bool(relocation), False), trained), s_map()]
+    deck = [s_done(done), s_questions(), s_input(), s_candidates(), s_plan(done)]
     if measured:
-        deck += [s_map_result(mapped), s_site_result(mapped), s_site_differences(mapped)]
-        if "layer" in mapped["sets"]:
-            deck.append(s_layers_result(mapped))
-    deck.append(s_lambda())
+        deck += [s_map_result(mapped), s_sites(mapped)]
+        if "layer" in mapped["sets"] and sweep:  # 表の正解率と読み取り精度は summarize-sweep.json にある
+            deck.append(s_layers(mapped, sweep))
     if curve:
         spread = next(p for p in sweep["points"] if p["arm"] == "baseline")["accuracy"]["range"]
-        deck.append(s_lambda_result(curve, str(mapped["primary_dim"]) if mapped else "", spread))
-    deck.append(s_relocate(mapped["choice"] if measured else None))
+        deck.append(s_lambda_result(curve, dim, spread))
     if relocation:
         deck.append(s_relocate_result(relocation))
-    deck.append(s_direction())
+    if not all(done[2:]):
+        deck.append(s_future(done, mapped["choice"] if measured else None))
     if measured or curve:
-        deck.append(s_summary(mapped if measured else None, curve, relocation, trained))
+        deck.append(s_summary(mapped if measured else None, curve, dim, relocation, done))
     return deck
 
 
