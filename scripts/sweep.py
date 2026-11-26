@@ -30,6 +30,13 @@ exactly what the reported runs at seed 42 saw. Nothing needs the timestamp after
 the analyses find a variant's finished run by its name — and a run that already finished
 is not trained again, so a sweep that was interrupted resumes where it stopped.
 
+Each run trains in a process of its own, which this one starts and waits for. A run does
+not hand all its host memory back when it returns — the second run of a process starts
+with what the first left — and the peak at the start of the final evaluation is already
+close to what the training machine holds (30GB and 7GB of swap). On 2026-11-26 the second
+position run was killed there by the kernel, and took the whole job with it. A process
+that ends gives everything back, whatever was holding it.
+
 Start with `--debug`. It finishes in minutes and proves the wiring before a day of GPU
 time is committed to it. Remove the `*_debug` runs it leaves in runs/ and snapshots/.
 """
@@ -42,11 +49,11 @@ import os
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import argparse
+import subprocess
+import sys
 from collections.abc import Callable
 from itertools import product
 from typing import NamedTuple
-
-from train4all.utils import empty_cuda_cache
 
 from taskalign.analysis import (
     LAYER_VARIANTS,
@@ -114,29 +121,37 @@ if __name__ == "__main__":
     parser.add_argument("sweep", choices=SWEEPS)
     parser.add_argument("--debug", action="store_true",
                         help="shrink every split to a smoke test that finishes in minutes")
+    # How this script starts itself for one run; not for the command line.
+    parser.add_argument("--only", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--timestamp", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     sweep = SWEEPS[args.sweep]
-    ts = timestamp()
     runs = list(product(sweep.seeds, sweep.variants(), sweep.arms))
+
+    if args.only is not None:
+        seed, (variant, settings), arm = runs[args.only]
+        run_training(
+            arm, seed, settings.as_debug() if args.debug else settings,
+            timestamp=args.timestamp, variant=variant,
+        )
+        raise SystemExit
+
+    ts = timestamp()
     print(f"sweep timestamp: {ts}\n")
 
     # Seed-major, so an interrupted sweep leaves whole comparisons behind.
-    for i, (seed, (variant, settings), arm) in enumerate(runs, start=1):
-        header = (f"Run {i}/{len(runs)}: {variant} {arm} (seed {seed})  ·  weight "
+    for i, (seed, (variant, settings), arm) in enumerate(runs):
+        header = (f"Run {i + 1}/{len(runs)}: {variant} {arm} (seed {seed})  ·  weight "
                   f"{settings.align_weight}, layers {settings.layers}, "
                   f"positions {settings.positions}")
         if not args.debug and (done := finished_timestamp(variant, arm, seed)):
             print(f"\n⏭️  {header}\n    already finished under {done} — not trained again")
             continue
-        print(f"\n{'=' * 79}\n▶️  {header}\n{'=' * 79}")
-        run_training(
-            arm, seed, settings.as_debug() if args.debug else settings,
-            timestamp=ts, variant=variant,
-        )
-
-        # Here rather than inside `run_training`: the model, its optimizer state and the
-        # trainer holding both are still live locals until that call returns.
-        empty_cuda_cache()
+        print(f"\n{'=' * 79}\n▶️  {header}\n{'=' * 79}", flush=True)
+        one_run = [sys.executable, __file__, args.sweep, "--only", str(i), "--timestamp", ts]
+        if status := subprocess.run(one_run + ["--debug"] * args.debug).returncode:
+            raise SystemExit(f"run {i + 1}/{len(runs)} stopped with status {status}; "
+                             f"the runs after it were not started")
 
     print(f"\n{'=' * 79}\n✅ All {len(runs)} runs of the {args.sweep} sweep are in.\n{'=' * 79}\n")

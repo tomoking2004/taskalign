@@ -609,7 +609,7 @@ def s_lambda_result(curve: dict, dim: str) -> Slide:
     if leaning:
         s.text([("→ 相対感度は λ に伴い単調に低下．今の低下は強さに応じる"
                  if curve["sensitivity_falls_at_every_step"]
-                 else "→ 相対感度は単調に下がらない．今の低下は強さに応じるとは言えない", BODY, RED)])
+                 else "→ 相対感度は単調に下がらず，今の低下は強さに応じるとは言えない", BODY, RED)])
     return s
 
 
