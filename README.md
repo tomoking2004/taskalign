@@ -22,11 +22,29 @@ PyTorch は GPU の世代ごとに index が違うので**先に**入れる．
 
 ```bash
 conda create -n taskalign -c conda-forge python=3.12 && conda activate taskalign
+conda env config vars set PYTHONDONTWRITEBYTECODE=1 && conda activate taskalign   # __pycache__ を作らない
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu132
 pip install -e .
 ```
 
-`pip install -e .` が `taskalign` をパスに通すので，`scripts/` のどれもが作業ディレクトリによらず `taskalign` を import できる．flash-attn は任意（Linux のみ）——無ければ自動で SDPA に落ちる．学習ループの [train4all](https://github.com/tomoking2004/train4all) は**リリースタグに固定**してある（どのタグかは `pyproject.toml`）——`main` を追うと，指標の並び順のような出力の形が実験の途中で変わりうる．
+`pip install -e .` が `taskalign` をパスに通すので，`scripts/` のどれもが作業ディレクトリによらず `taskalign` を import できる．SmolVLM-500M の重み（約1GB）は，最初にモデルを読むスクリプトが Hugging Face から `~/.cache/huggingface/` に取ってくる．lint の ruff はこの環境に入らない（`pip install ruff`）．
+
+**flash-attn は任意（Linux のみ）**——無ければ自動で SDPA に落ちる．ただし報告した run は flash-attn 2.8.3.post1 で回してある（各 run の `log.txt` の環境バナー）ので，学習を足す機には入れる．配布されている wheel が無ければソースからビルドすることになり，それには次の3つが要る（2026-11-25 に Ubuntu 26.04・RTX 5090 の機で確かめた）．
+
+- **torch を 2.13.0 に留める．** flash-attn 2.8.3.post2 は C++17 でビルドするが，torch 2.15.0 のヘッダは C++20 を求めるので通らない．2.13.0 は報告した run の版でもある．上の3行目を `pip install torch==2.13.0 torchvision==0.28.0 --index-url …` に替える．
+- **CUDA のコンパイラを conda-forge だけから入れる．** `--override-channels` を外すと既定のチャンネルが混ざり，conda は環境から python と pip を取り除く．
+- **ヘッダの場所を教える．** conda-forge の `cuda-toolkit` はヘッダを `targets/x86_64-linux/` の下に置くので，`CUDA_HOME` だけでは `cuda_runtime.h` が見つからない．
+
+```bash
+conda install -c conda-forge --override-channels cuda-toolkit=13.2
+export CUDA_HOME=$CONDA_PREFIX
+export CPATH=$CONDA_PREFIX/targets/x86_64-linux/include LIBRARY_PATH=$CONDA_PREFIX/targets/x86_64-linux/lib
+export FLASH_ATTN_CUDA_ARCHS=120 MAX_JOBS=4 NVCC_THREADS=2   # 120 は RTX 50 系．並列数はこの機（RAM 32GB）で通った値
+pip install ninja
+pip install flash-attn --no-build-isolation                 # この機で十数分
+```
+
+SDPA と flash-attn とで，`probe_dependence_map.py reported --prompts 8` の表の値は 0.001 以内で一致した（同日．torch 2.15.0 + SDPA と，torch 2.13.0 + flash-attn 2.8.3.post2．transformers はどちらも 5.24.1）．学習ループの [train4all](https://github.com/tomoking2004/train4all) は**リリースタグに固定**してある（どのタグかは `pyproject.toml`）——`main` を追うと，指標の並び順のような出力の形が実験の途中で変わりうる．
 
 データセットは [GQA 公式](https://cs.stanford.edu/people/dorarad/gqa/download.html) から取り，`cfg.datasets_root/gqa/` に置く（`images/`・`questions/`・`eval/`）．`train_balanced_questions.json` は 813MB あるので，これを読むスクリプトは立ち上がりに数分かかる．
 
@@ -59,7 +77,7 @@ python scripts/check_tidy.py               # tmp/ の形と __pycache__ を確�
 
 **モデルを動かすのは7本**——`train.py`・`sweep.py`・`generate.py` と，`probe_bypass_pullback.py`・`probe_dependence.py`・`probe_dependence_map.py`（ヤコビ積を取るのでモデルを走らせる），`probe_drift.py`（加工した画像でモデルを走らせ直す）である．残る12本はモデルを走らせない．`probe_bypass.py` を除いて重みも要らないので，GPU の無い機でも回せる．ただし6本（`audit_dataset.py`・`probe_signature.py`・`probe_operators.py`・`stratify_by_frequency.py`・`summarize_sweep.py`・`probe_bypass.py`）は GQA の質問ファイルを読むので，それを置いた機で回す．分析の13本（`train.py`・`sweep.py`・`generate.py`・`update_poster.py`・`update_progress.py`・`check_tidy.py` を除いたもの）は，それぞれ自分と同じ名前の JSON を `analyses/` に書く（`probe_signature.py` → `analyses/probe-signature.json`．`probe_drift.py` は問ごとの距離を同じ名前の `.pt` にも書く）．どの実験を読むかは `taskalign/analysis/experiment.py` の `TIMESTAMP` が決める（§8.1 で足した乱数種 45・46 のバッチは `ADDED_TIMESTAMP`）．`sweep.py` が学習した run（層・強さ・位置を変えたもの）は，timestamp を書き写さなくても，分析の側が variant の名前から見つける（`finished_timestamp`）．`probe_bypass.py`・`probe_bypass_pullback.py`・`probe_dependence.py`・`probe_dependence_map.py`・`probe_drift.py` の5本は学習済みの重みを要求する（後述）．
 
-`train.py` と `sweep.py` は run の建て方を共有する——`taskalign/training/run.py` の `Settings` と `run_training` である．既定値が報告した実験の値なので，**sweep は変える設定だけを書き，残りが同じであることが目で見える．** `train.py` は冒頭の `DEBUG = True` で，`sweep.py` は `--debug` で，全分割を切り詰めた短い試走になり，数分で配線を確かめられる．
+`train.py` と `sweep.py` は run の建て方を共有する——`taskalign/training/run.py` の `Settings` と `run_training` である．既定値が報告した実験の値なので，**sweep は変える設定だけを書き，残りが同じであることが目で見える．** `train.py` は冒頭の `DEBUG = True` で，`sweep.py` は `--debug` で，全分割を切り詰めた短い試走になり，数分で配線を確かめられる．`sweep.py` は run を1本ずつ別のプロセスで学習する——run は終わってもホストのメモリを返しきらず，同じプロセスの2本目は1本目の残りを抱えて始まるので，最後の評価の冒頭の山が実行機の RAM（30GB と swap 7GB）を越える．プロセスが終われば，何が抱えていたにせよ全部が返る．山の中身は特定していない．
 
 `train.py` は `SEEDS` の各 seed で baseline → proposal → ablation を順に通す．既定は §8.1 で足した 45・46 で，報告した 42・43・44（`20260829-134859`）は回し直さない．run ごとにモデル・loader・trainer を作り直すので，同じ seed の3群は同じバッチ列を見る（サンプラの epoch カウンタを次の群に持ち越さない）．seed が変わればその並びも初期化も変わるので，**群間の差を run ごとのばらつきと区別できる**．
 
@@ -69,7 +87,7 @@ python scripts/check_tidy.py               # tmp/ の形と __pycache__ を確�
 
 ## 次の一手を走らせる
 
-**研究文書 §8 の五つのうち，§8.1 は走らせ終えた．次に走らせる三つ——§8.5 の第1歩（答えが依存する層と位置のマップ），§8.4 の強さ，§8.5 の第2歩（マップが選んだ位置への掛け直し）——は実装してあり，未実行で，一つのジョブで走る．** §8.2（稀な署名を表現の側で）にはまだスクリプトが無く，§8.3（答えの型のラベルで整合し，頑健性も測る）と §8.5 の第3歩（答えを動かす方向に限った整合）は新しい実装を要する．
+**研究文書 §8 の五つのうち，§8.1 は走らせ終えた．続く三つ——§8.5 の第1歩（答えが依存する層と位置のマップ），§8.4 の強さ，§8.5 の第2歩（マップが選んだ位置への掛け直し）——は一つのジョブで走り，第1歩と強さは走らせ終えて（2026-11-25〜26），第2歩は6本のうち1本（proposal・乱数種 42）まで学習してある．** 第2歩の2本目は，最後の評価の冒頭でメモリが足りずにカーネルに止められ，ジョブごと落ちた（2026-11-26 11:31）．残りは `bash scripts/run_plan.sh position` で続きから走る．マップは末尾の位置を選んだので，第2歩は6位置すべてに掛ける．研究文書の §8.4・§8.5 には，結果をまだ書き入れていない． §8.2（稀な署名を表現の側で）にはまだスクリプトが無く，§8.3（答えの型のラベルで整合し，頑健性も測る）と §8.5 の第3歩（答えを動かす方向に限った整合）は新しい実装を要する．
 
 ```bash
 bash scripts/run_plan.sh                   # check → map → strength → position の順に全部
@@ -80,8 +98,8 @@ bash scripts/run_plan.sh strength position # 名指した段だけ
 | 段 | すること | 見込み（RTX 5090） |
 | --- | --- | --- |
 | `check` | パッケージ・GQA・報告した9本の重み・リモートが，コードの探す場所に在るかを確かめる | 数十秒 |
-| `map` | 8問の試走の後，9本（と，重みが在れば第8層・第24層の2本）で相対感度を全層・全位置で測り，第2歩で整合を掛ける位置を選ぶ | 約1時間（未計測の見積もり） |
-| `strength` | 試走の後，$\lambda = 0.03 / 0.3 / 1.0$ を乱数種 42 で学習し，各強さの相対感度・読み取り精度・正解率を並べる | 約9時間 |
+| `map` | 8問の試走の後，9本（と，重みが在れば第8層・第24層の2本）で相対感度を全層・全位置で測り，第2歩で整合を掛ける位置を選ぶ | 約20分（実測18分） |
+| `strength` | 試走の後，$\lambda = 0.03 / 0.3 / 1.0$ を乱数種 42 で学習し，各強さの相対感度・読み取り精度・正解率を並べる | 約9時間半（実測9時間31分） |
 | `position` | 試走の後，選んだ位置に proposal と ablation を乱数種3つで学習し，その位置の相対感度と正解率から §8.5 第2歩の表の行を決める | 約18時間 |
 
 **段は，終わるたびに自分で記録する．** `analyses/` の結果と，済んだ run の `snapshots/` と，その時点の結果で組み直した進捗報告（`presentations/20261127_進捗報告.pptx`．`update_progress.py` が書く）を commit し，`git pull --rebase` してから push する．だからノートPCでは，**`git pull` するだけで結果と資料が揃う．** 途中で止まっても，同じコマンドで再開できる．済んだ run は学習し直さない．試走と測定は重みからやり直すが，結果と資料が前と同じなら，その段は何も記録しない．ログは `logs/run-plan-<開始時刻>.log` に落ちる．
@@ -178,6 +196,8 @@ python scripts/update_progress.py
 **逆に言えば，重みは clone に付いてこない．** 本走9 run と §8.1 の6 run の `checkpoints/best.pth` は，それを回したマシン（`log.txt` の環境バナーによれば Ubuntu 26.04・RTX 5090）の `runs/` にしかない．`probe_bypass.py`・`probe_bypass_pullback.py`・`probe_dependence.py`・`probe_drift.py` はこれを要求するので，そのマシンで走らせるか，重みを先に持ってくる．持ってくるなら，実行機の `runs/` の写しを USB（`E:\runs`）に置くか，置き場所を `$TASKALIGN_RUNS_ROOT` で名指しする——重みを読む側は run ごとに，`$TASKALIGN_RUNS_ROOT`・ローカルの `runs/`・`E:\runs` の順に探す（`taskalign/config.py` の `run_roots`）．
 
 `snapshots/` には5つのバッチが在る．研究文書の主結果（§5）が報告するのは `20260829-134859` の9 run（3群 × 3 seed）で，分析スクリプトは `summarize_sweep.py` と，§8.1 の乱数種 45・46 も読む `probe_drift.py`・`normalize_drift.py` を除いてこれしか読まない．`20261105-162351` の6 run は §8.1 で足した乱数種 45・46（3群 × 2 seed）で，主結果には入れず，`probe_drift.py`・`normalize_drift.py` だけが読む．`20260830-223056` の2 run は層を第8層・第24層に移した試走（研究文書 §A.5）で，`summarize_sweep.py` だけが読む．`20260727-002344` の9 run は同じ実験を旧版のコードで走らせたもので，走り直す前の報告の記録として残してある．`20260714-033208` の3 run は seed を振る前の単一 seed の実験で，[presentations/](presentations/) の前期公開（2026-07-24）のポスターの裏付けとして残してある——**どちらも別の実行なので，数値が研究文書と一致しなくて当然である．**
+
+**2026-08-30 までの run の名前と `log.txt` の時刻は，実際より先を指している．** 実行機の時計が進んでいたためで，修理したときの記録では約9時間である（確かめられるのは向きだけ——`20260830-223056` の2 run は，名前の時刻より前の 2026-08-30 19:23 に記録されている）．名前は識別子であって測定値ではないので，直していない．時計は 2026-08-30 に NICT へ同期させてあり（実行機の `/etc/chrony/sources.d/nict.sources` と `/etc/chrony/conf.d/authselectmode.conf`．理由はそのコメントにある），`20261105-162351` の名前は実時刻である．
 
 再現に要る情報は3箇所に分かれる——**実験を決める trainer の引数が `config.json`，モデルと loader の設定が `best.pth` の extras，マシンとライブラリの版が `log.txt` の環境バナー**．`config.json` を引数だけに保つので `Trainer(vlm, processor, **config)` がそのまま通り，trainer が受け取らないもの（`vlm` の引数・loader の設定）は extras に回り，**この checkout の外が決めるもの**はバナーが引き受ける．ソースが決めているもの（重みの fp32・bf16 autocast 等）はどこにも無い．この checkout のコードが答えるからで，二重に持たない．
 
