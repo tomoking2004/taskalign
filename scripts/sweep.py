@@ -150,7 +150,7 @@ if __name__ == "__main__":
             continue
         print(f"\n{'=' * 79}\n▶️  {header}\n{'=' * 79}", flush=True)
         one_run = [sys.executable, __file__, args.sweep, "--only", str(i), "--timestamp", ts]
-        if status := subprocess.run(one_run + ["--debug"] * args.debug).returncode:
+        if status := subprocess.run(one_run + ["--debug"] * args.debug, check=False).returncode:
             raise SystemExit(f"run {i + 1}/{len(runs)} stopped with status {status}; "
                              f"the runs after it were not started")
 
